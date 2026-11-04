@@ -1,0 +1,36 @@
+name: Build Windows (Bogestv0 REMOTE)
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ['v*']
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Download WinSW (service wrapper, checksum verified)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe -OutFile build/service/Bogestv0Service.exe
+          $h = (Get-FileHash build/service/Bogestv0Service.exe -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da") { throw "WinSW checksum mismatch: $h" }
+      - name: Build installer + portable
+        run: npx electron-builder --win portable nsis --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # без подписи сертификатом
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bogestv0-REMOTE-windows-x64
+          path: client/dist/*.exe
+          if-no-files-found: error
