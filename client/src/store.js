@@ -12,6 +12,7 @@ const DEFAULTS = {
   allowedIds: [],            // пусто = любой ID с верным паролем
   autostart: true,
   minimizeToTray: true,
+  relayOnly: true,           // соединять только через TURN-сервер (устойчиво к разным NAT); можно выключить в «Безопасность»
   server: { host: '46.226.166.141', port: 8443, fingerprint: '' },
   devices: [],               // [{id, name}]
   log: [],                   // журнал подключений

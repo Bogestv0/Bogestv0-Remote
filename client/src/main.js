@@ -204,7 +204,7 @@ function registerIpc() {
     injector: injector.available, sig: state(),
   }));
   ipcMain.handle('cfg:set', (_e, patch) => {
-    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'devices', 'server', 'name'];
+    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'relayOnly', 'devices', 'server', 'name'];
     let restart = false;
     for (const k of Object.keys(patch || {})) {
       if (!allowed.includes(k)) continue;

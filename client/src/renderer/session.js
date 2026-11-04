@@ -20,6 +20,14 @@
   const fpOf = (sdp) => { const m = /a=fingerprint:sha-256 ([0-9A-Fa-f:]+)/.exec(sdp || ''); return m ? m[1].toUpperCase() : ''; };
   const ID_RE = /^\d{9}$/;
   const dbg = (...a) => { if (window.__dbgLog) window.__dbgLog.push(performance.now().toFixed(0) + ' ' + a.join(' ')); };
+  // Журнал диагностики соединения (виден в «Безопасность → Диагностика», держим последние 400 строк). Без паролей и адресов.
+  const ev = (...a) => {
+    try {
+      const L = (window.__evlog = window.__evlog || []);
+      L.push(new Date().toISOString().slice(11, 23) + ' ' + a.join(' '));
+      if (L.length > 400) L.splice(0, L.length - 400);
+    } catch {}
+  };
 
   async function proof(password, nonce, fpViewer, fpHost) {
     const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
@@ -75,16 +83,18 @@
         this.endOut('offline');
       }
     }
-    sendSig(to, data) { return this.bridge.sig.send({ t: 'signal', to, data }); }
+    sendSig(to, data) { if (data && data.k !== 'ice') ev('sig->', data.k, 'to', to); return this.bridge.sig.send({ t: 'signal', to, data }); }
 
     onSignal(from, name, d) {
+      if (d.k !== 'ice') ev('sig<-', d.k, 'from', from);
       switch (d.k) {
         case 'offer': return this.hostOffer(from, name, d);
         case 'answer': return this.viewerAnswer(from, d);
         case 'reject': if (this.outgoing && this.outgoing.sid === d.sid && this.outgoing.to === from) this.endOut(String(d.reason || 'rejected')); return;
         case 'ice': {
           const s = [this.incoming, this.outgoing].find((x) => x && x.sid === d.sid && (x.from === from || x.to === from));
-          if (!s || !d.cand) return;
+          if (!s || !d.cand) { if (!s) ev('sig<- ice без сессии'); return; }
+          s.icesIn = (s.icesIn || 0) + 1;
           if (s.remoteSet) s.pc.addIceCandidate(d.cand).catch(() => {}); else s.pendingIce.push(d.cand);
         }
       }
@@ -92,15 +102,55 @@
     flushIce(s) { s.remoteSet = true; for (const c of s.pendingIce) s.pc.addIceCandidate(c).catch(() => {}); s.pendingIce = []; }
     /** Кандидаты ICE уходят только после offer/answer: иначе получатель отбросит их как «чужую сессию». */
     outIce(s, to, cand) {
+      s.icesOut = (s.icesOut || 0) + 1;
       const msg = { k: 'ice', sid: s.sid, cand: cand.toJSON() };
       if (s.sdpSent) this.sendSig(to, msg); else (s.outIceQ = s.outIceQ || []).push(msg);
     }
     sdpDone(s, to) { s.sdpSent = true; for (const m of (s.outIceQ || []).splice(0)) this.sendSig(to, m); }
-    newPc() { return new RTCPeerConnection({ iceServers: this.hooks.getIce() || [] }); }
+    newPc() {
+      const cfg = (this.hooks.getCfg && this.hooks.getCfg()) || {};
+      const servers = this.hooks.getIce() || [];
+      const hasTurn = servers.some((x) => [].concat(x.urls || []).some((u) => /^turns?:/i.test(u)));
+      const opt = { iceServers: servers };
+      // «Только через сервер»: прямые маршруты (host/srflx) отсекаются, всё идёт через TURN — устойчиво к разным NAT.
+      if (cfg.relayOnly === true && hasTurn) opt.iceTransportPolicy = 'relay';
+      ev('pc', 'создан; iceServers=' + servers.length, 'turn=' + hasTurn, 'policy=' + (opt.iceTransportPolicy || 'all'));
+      return new RTCPeerConnection(opt);
+    }
+    /** Подписки на состояния WebRTC для журнала + снимок статистики через 10 секунд. */
+    watchPc(s, tag) {
+      const pc = s.pc; s.tag = tag; s.cands = { host: 0, srflx: 0, relay: 0, prflx: 0 };
+      pc.addEventListener('icegatheringstatechange', () => ev(tag, 'gather', pc.iceGatheringState));
+      pc.addEventListener('iceconnectionstatechange', () => ev(tag, 'ice', pc.iceConnectionState));
+      pc.addEventListener('connectionstatechange', () => ev(tag, 'conn', pc.connectionState));
+      pc.addEventListener('signalingstatechange', () => ev(tag, 'signaling', pc.signalingState));
+      pc.addEventListener('icecandidateerror', (e) => ev(tag, 'icecandidateerror', e.errorCode, e.url || '', e.errorText || ''));
+      pc.addEventListener('icecandidate', (e) => {
+        if (!e.candidate) return ev(tag, 'сбор адресов завершён', JSON.stringify(s.cands));
+        const t = e.candidate.type; if (t in s.cands) s.cands[t]++;
+      });
+      s.dumpTimer = setTimeout(() => this.dumpStats(s, 't+10с'), 10000);
+    }
+    async dumpStats(s, why) {
+      if (!s || !s.pc) return;
+      try {
+        const rep = await s.pc.getStats(); const loc = {}; const rem = {}; const pairs = [];
+        rep.forEach((r) => { if (r.type === 'local-candidate') loc[r.id] = r; else if (r.type === 'remote-candidate') rem[r.id] = r; else if (r.type === 'candidate-pair') pairs.push(r); });
+        const sum = (o) => { const c = {}; Object.values(o).forEach((x) => { const k = x.candidateType + '/' + (x.protocol || '') + (x.relayProtocol ? '(' + x.relayProtocol + ')' : ''); c[k] = (c[k] || 0) + 1; }); return JSON.stringify(c); };
+        ev(s.tag, 'статистика', why, 'локальные', sum(loc), 'удалённые', sum(rem), 'ice-вх', s.icesIn || 0, 'ice-исх', s.icesOut || 0, 'пар', pairs.length);
+        const by = {};
+        pairs.forEach((p) => {
+          const l = loc[p.localCandidateId]; const r = rem[p.remoteCandidateId];
+          const k = (l ? l.candidateType : '?') + '>' + (r ? r.candidateType : '?') + ' ' + p.state + (p.nominated ? ' *' : '');
+          const o = (by[k] = by[k] || { n: 0, req: 0, resp: 0 }); o.n++; o.req += p.requestsSent || 0; o.resp += p.responsesReceived || 0;
+        });
+        ev(s.tag, 'пары', JSON.stringify(by));
+      } catch (e) { ev(s.tag, 'статистика: ошибка', e && e.message); }
+    }
 
     // ============================================================ HOST
     async hostOffer(from, name, d) {
-      const reject = (reason) => this.sendSig(from, { k: 'reject', sid: d.sid, reason });
+      const reject = (reason) => { ev('host', 'reject', reason); return this.sendSig(from, { k: 'reject', sid: d.sid, reason }); };
       if (!ID_RE.test(from) || typeof d.sid !== 'string' || d.sid.length > 40 || typeof d.sdp !== 'string' || d.sdp.length > 100000) return;
       const meta = d.meta || {};
       const mode = meta.mode === 'password' ? 'password' : 'ask';
@@ -119,6 +169,8 @@
       };
       try {
         const pc = s.pc = this.newPc();
+        this.watchPc(s, 'host');
+        ev('host', 'offer принят', 'режим', mode);
         pc.onicecandidate = (e) => { if (e.candidate) this.outIce(s, from, e.candidate); };
         // Каналы «заранее оговорены» (negotiated): создаются с обеих сторон с одинаковыми id и открываются симметрично.
         // Каналы, объявляемые собеседником (ondatachannel), в Chromium иногда надолго остаются в connecting.
@@ -139,10 +191,11 @@
         s.answerSdp = pc.localDescription.sdp;
         this.sendSig(from, { k: 'answer', sid: s.sid, sdp: pc.localDescription.sdp });
         this.sdpDone(s, from);
+        ev('host', 'answer отправлен');
         s.authTimer = setTimeout(() => { if (s.state === 'connecting') this.endIn('auth-timeout'); }, 40000);
         this.hooks.onIn({ type: 'connecting', sess: this.pub(s) });
       } catch (e) {
-        console.error('hostOffer', e); this.endIn('error');
+        console.error('hostOffer', e); ev('host', 'ОШИБКА hostOffer', e && e.message); this.endIn('error');
       }
     }
     pub(s) { return { sid: s.sid, from: s.from, name: s.name, mode: s.mode, state: s.state, perms: { ...s.perms }, startedAt: s.startedAt, wantAdmin: s.wantAdmin }; }
@@ -154,9 +207,11 @@
       const challenge = () => { dbg('host: challenge ->', s.sid, 'state', ch.readyState); sendCtl({ k: 'challenge', nonce: s.nonce }); };
       // Не шлём первыми: у зрителя канал в этот момент может быть ещё «connecting» и сообщение потеряется.
       // Challenge отправляем в ответ на его hello (зритель пишет, только когда его канал точно открыт).
-      ch.onclose = () => { if (this.incoming === s) this.endIn('lost', false); };
-      ch.onmessage = async (ev) => {
-        let m; try { m = JSON.parse(ev.data); } catch { return; }
+      ch.addEventListener('open', () => ev('host', 'ctl открыт'));
+      ch.onclose = () => { ev('host', 'ctl закрыт'); if (this.incoming === s) this.endIn('lost', false); };
+      ch.onmessage = async (msgEv) => {
+        let m; try { m = JSON.parse(msgEv.data); } catch { return; }
+        if (m.k !== 'mm' && m.k !== 'mv') ev('host', 'ctl<-', m.k);
         dbg('host: ctl msg', m.k, s.sid, 'incoming-is-s', this.incoming === s, s.state);
         if (this.incoming !== s) return;
         if (s.state === 'connecting') {
@@ -328,7 +383,9 @@
     endIn(reason, tellPeer = true, silentLog = false) {
       const s = this.incoming; if (!s) return;
       this.incoming = null;
-      clearTimeout(s.authTimer); clearTimeout(s.discTimer);
+      ev('host', 'сессия завершена:', reason);
+      this.dumpStats(s, 'конец:' + reason);
+      clearTimeout(s.authTimer); clearTimeout(s.discTimer); clearTimeout(s.dumpTimer);
       if (tellPeer && s.sendCtl) s.sendCtl({ k: 'bye', reason });
       else if (!s.sendCtl && s.from) this.sendSig(s.from, { k: 'reject', sid: s.sid, reason });
       const wasActive = s.state === 'active';
@@ -354,6 +411,8 @@
       const emit = (type, extra) => this.hooks.onOut({ type, to: id, ...extra });
       try {
         const pc = s.pc = this.newPc();
+        this.watchPc(s, 'viewer');
+        ev('viewer', 'подключение к', id, 'режим', s.mode);
         s.ctl = pc.createDataChannel('ctl', { negotiated: true, id: 1 });
         s.mv = pc.createDataChannel('mv', { negotiated: true, id: 2, ordered: false, maxRetransmits: 0 });
         s.tx = [pc.addTransceiver('video', { direction: 'recvonly' }), pc.addTransceiver('audio', { direction: 'recvonly' }), pc.addTransceiver('audio', { direction: 'recvonly' })];
@@ -370,26 +429,28 @@
         s.offerSdp = pc.localDescription.sdp;
         this.sendSig(id, { k: 'offer', sid: s.sid, sdp: pc.localDescription.sdp, meta: { name: this.hooks.getCfg().name, mode: s.mode, admin: s.wantAdmin } });
         this.sdpDone(s, id);
+        ev('viewer', 'offer отправлен');
         s.timeout = setTimeout(() => { if (s.state !== 'active') this.endOut('timeout'); }, 45000);
         emit('state', { state: 'calling' });
-      } catch (e) { console.error('connect', e); this.endOut('error'); }
+      } catch (e) { console.error('connect', e); ev('viewer', 'ОШИБКА connect', e && e.message); this.endOut('error'); }
       return s.sid;
     }
     async viewerAnswer(from, d) {
       const s = this.outgoing;
-      if (!s || s.sid !== d.sid || s.to !== from || s.remoteSet) return;
+      if (!s || s.sid !== d.sid || s.to !== from || s.remoteSet) { ev('viewer', 'answer проигнорирован:', !s ? 'нет исходящей сессии' : s.sid !== d.sid ? 'другой sid' : s.to !== from ? 'другой ID' : 'повторный'); return; }
       s.answerSdp = d.sdp; // запоминаем ДО применения: канал может открыться раньше, чем завершится setRemoteDescription
-      try { await s.pc.setRemoteDescription({ type: 'answer', sdp: d.sdp }); this.flushIce(s); }
-      catch (e) { console.error('answer', e); this.endOut('error'); }
+      try { await s.pc.setRemoteDescription({ type: 'answer', sdp: d.sdp }); ev('viewer', 'answer применён'); this.flushIce(s); }
+      catch (e) { console.error('answer', e); ev('viewer', 'ОШИБКА answer', e && e.message); this.endOut('error'); }
     }
     viewerCtl(s) {
       const send = (o) => s.ctl.readyState === 'open' && s.ctl.send(JSON.stringify(o));
       s.send = send;
       const hello = () => { if (this.outgoing === s && !s.challenged) send({ k: 'hello' }); };
-      s.ctl.onopen = () => { hello(); let n = 0; const t = setInterval(() => { if (s.challenged || this.outgoing !== s || ++n > 8) clearInterval(t); else hello(); }, 1500); };
-      s.ctl.onclose = () => { if (this.outgoing === s) this.endOut('lost', false); };
-      s.ctl.onmessage = async (ev) => {
-        let m; try { m = JSON.parse(ev.data); } catch { return; }
+      s.ctl.onopen = () => { ev('viewer', 'ctl открыт'); hello(); let n = 0; const t = setInterval(() => { if (s.challenged || this.outgoing !== s || ++n > 8) clearInterval(t); else hello(); }, 1500); };
+      s.ctl.onclose = () => { ev('viewer', 'ctl закрыт'); if (this.outgoing === s) this.endOut('lost', false); };
+      s.ctl.onmessage = async (msgEv) => {
+        let m; try { m = JSON.parse(msgEv.data); } catch { return; }
+        ev('viewer', 'ctl<-', m.k);
         dbg('viewer: ctl msg', m.k, s.sid, 'outgoing-is-s', this.outgoing === s);
         if (this.outgoing !== s) return;
         switch (m.k) {
@@ -451,7 +512,9 @@
     endOut(reason, tellPeer = true) {
       const s = this.outgoing; if (!s) return;
       this.outgoing = null;
-      clearTimeout(s.timeout); clearTimeout(s.discTimer); clearInterval(s.statsTimer);
+      ev('viewer', 'сессия завершена:', reason);
+      this.dumpStats(s, 'конец:' + reason);
+      clearTimeout(s.timeout); clearTimeout(s.discTimer); clearInterval(s.statsTimer); clearTimeout(s.dumpTimer);
       if (tellPeer) { if (s.state === 'active' || s.state === 'calling') { try { s.send && s.send({ k: 'bye', reason }); } catch {} } }
       const was = s.state; s.state = 'ended';
       setTimeout(() => { try { s.pc && s.pc.close(); } catch {} }, 200);

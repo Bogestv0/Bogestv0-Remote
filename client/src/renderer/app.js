@@ -434,10 +434,24 @@
         <div class="field"><label>Отпечаток сертификата сервера (SHA-256)</label><input id="svFp" value="${esc(sv.fingerprint)}" placeholder="пусто — запомнится при первом подключении"><span class="hint">Приложение доверяет только этому сертификату. Если отпечаток изменится — соединение будет заблокировано.</span></div>
         <div class="row-actions"><button class="btn btn-primary btn-sm" data-action="sv-save">Применить</button><button class="btn btn-ghost btn-sm" data-action="sv-reset">Сбросить отпечаток</button></div>
       </div>
+      <div class="panel" style="display:flex;flex-direction:column;gap:2px">
+        <div class="panel-head" style="margin-bottom:10px"><h2>Соединение</h2></div>
+        <div class="setting-row"><div><div class="setting-label">Соединять только через сервер</div><div class="setting-help">Весь трафик идёт через ваш сервер (TURN). Это надёжнее, когда устройства в разных сетях и прямое соединение не устанавливается. Выключите, чтобы разрешить прямые маршруты (меньше задержка, но не всегда работает). Меняйте на обоих устройствах.</div></div>${switchHtml(c.relayOnly === true, 'sec-relay')}</div>
+      </div>
+      <div class="panel" style="display:flex;flex-direction:column;gap:12px">
+        <div class="panel-head"><h2>Диагностика соединения</h2><span class="hint">если подключение не получается — нажмите «Скопировать» и пришлите текст</span></div>
+        <textarea id="diagBox" readonly spellcheck="false" style="width:100%;height:220px;resize:vertical;font-family:var(--mono,monospace);font-size:11px;line-height:1.45;background:rgba(0,0,0,.25);color:inherit;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:10px">${esc(diagText())}</textarea>
+        <div class="row-actions"><button class="btn btn-primary btn-sm" data-action="diag-copy">Скопировать</button><button class="btn btn-ghost btn-sm" data-action="diag-clear">Очистить</button></div>
+      </div>
       <div class="panel" style="display:flex;flex-direction:column;gap:12px">
         <div class="panel-head"><h2>Журнал подключений</h2><span class="hint">хранится 90 дней</span></div>
         <div style="overflow-x:auto">${c.log.length ? `<table class="log"><tr><th>Кто</th><th>Устройство</th><th>Доступ</th><th>Время</th></tr>${c.log.slice(0, 50).map(logRow).join('')}</table>` : '<div class="empty">Подключений пока не было</div>'}</div>
       </div>`;
+  }
+  function diagText() {
+    const c = S.cfg || {};
+    const head = `Bogestv0 REMOTE v${c.version || '?'} · ${c.platform || ''} · ID ${c.id || '?'} · relayOnly=${c.relayOnly === true} · сервер ${S.sig && S.sig.connected ? 'в сети' : 'нет связи'} · ${new Date().toISOString()}`;
+    return head + '\n' + (window.__evlog || []).join('\n');
   }
   const randomPassword = () => { const a = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const r = crypto.getRandomValues(new Uint8Array(14)); return [...r].map((x) => a[x % a.length]).join(''); };
   function passwordDialog() {
@@ -497,6 +511,9 @@
       case 'sec-unattended': { const r = await B.cfg.set({ unattended: !S.cfg.unattended }); if (!r.ok) toast(r.error, true); await refreshCfg(); return renderAll(); }
       case 'sec-autostart': await B.cfg.set({ autostart: !S.cfg.autostart }); await refreshCfg(); return renderAll();
       case 'sec-tray': await B.cfg.set({ minimizeToTray: !S.cfg.minimizeToTray }); await refreshCfg(); return renderAll();
+      case 'sec-relay': await B.cfg.set({ relayOnly: !(S.cfg.relayOnly === true) }); await refreshCfg(); return renderAll();
+      case 'diag-copy': B.app.copy(diagText()); return toast('Журнал скопирован — вставьте его в чат');
+      case 'diag-clear': window.__evlog = []; return renderSecurity();
       case 'sec-password': return passwordDialog();
       case 'sec-allowed': return allowedDialog();
       case 'sv-save': {
@@ -537,6 +554,7 @@
     });
     B.app.onNavigate((v) => { location.hash = v; });
     setInterval(pollPresence, 10000);
+    setInterval(() => { const b = $('diagBox'); if (b && S.view === 'security') { const t = diagText(); if (b.value !== t) { b.value = t; b.scrollTop = b.scrollHeight; } } }, 2000);
     show((location.hash || '#devices').slice(1));
     if (S.sig.connected) pollPresence();
     B.app.ready(); // подписки готовы — main может отдать накопленные сообщения
