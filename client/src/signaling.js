@@ -24,6 +24,7 @@ class Signaling extends EventEmitter {
     if (this.ws) { try { this.ws.terminate(); } catch {} this.ws = null; }
     this.setState({ connected: false });
   }
+  diag(text) { this.emit('message', { t: 'diag', text }); }
   setState(p) { this.state = { ...this.state, ...p }; this.emit('state', this.state); }
 
   connect() {
@@ -51,6 +52,7 @@ class Signaling extends EventEmitter {
         this.store.data.server.fingerprint = fp; this.store.save();
         this.emit('fingerprint-learned', fp);
       }
+      this.diag('сокет открыт, отправляю hello');
       this.hello();
     });
 
@@ -58,6 +60,7 @@ class Signaling extends EventEmitter {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
       switch (m.t) {
         case 'welcome':
+          this.diag('welcome, ID ' + m.id);
           this.retry = 0; this.ice = m.ice || [];
           this.setState({ connected: true, id: m.id, error: '' });
           this.emit('ice', this.ice);
@@ -73,8 +76,11 @@ class Signaling extends EventEmitter {
         default: this.emit('message', m);
       }
     });
-    ws.on('close', () => { if (this.ws === ws) { this.ws = null; this.setState({ connected: false }); this.scheduleRetry(); } });
-    ws.on('error', (e) => { this.setState({ connected: false, error: this.explain(e) }); });
+    ws.on('close', (code, reason) => {
+      this.diag('сокет закрыт код=' + code + (reason && reason.length ? ' причина=' + reason.toString() : '') + (code === 4000 ? ' (ID занят другим экземпляром приложения!)' : ''));
+      if (this.ws === ws) { this.ws = null; this.setState({ connected: false }); this.scheduleRetry(); }
+    });
+    ws.on('error', (e) => { this.diag('ошибка сокета: ' + (e && (e.code || e.message))); this.setState({ connected: false, error: this.explain(e) }); });
   }
   explain(e) {
     const c = e && e.code;

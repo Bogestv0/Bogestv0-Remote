@@ -78,12 +78,32 @@
 
     // ----------------------------------------------------------- сигналы с сервера
     onServerMessage(m) {
+      if (m.t === 'diag') { ev('ws', m.text); return; }
+      if (m.t === 'error' && m.code === 'offline') ev('sig', 'сервер: адресат не в сети', m.to);
       if (m.t === 'signal') return this.onSignal(m.from, m.name, m.data || {});
       if (m.t === 'error' && m.code === 'offline' && this.outgoing && this.outgoing.to === m.to && this.outgoing.state === 'calling') {
         this.endOut('offline');
       }
     }
-    sendSig(to, data) { if (data && data.k !== 'ice') ev('sig->', data.k, 'to', to); return this.bridge.sig.send({ t: 'signal', to, data }); }
+    /** Отправка сигнала. Если сокет сервера в этот момент закрыт — сообщение не теряем, а держим в очереди до переподключения. */
+    async sendSig(to, data) {
+      const isIce = data && data.k === 'ice';
+      if (!isIce) ev('sig->', data && data.k, 'to', to);
+      let ok = false;
+      try { ok = (await this.bridge.sig.send({ t: 'signal', to, data })) !== false; } catch { ok = false; }
+      if (!ok) {
+        ev('sig-> НЕ отправлено (нет связи с сервером), ждём переподключения:', data && data.k, 'to', to);
+        (this.outbox = this.outbox || []).push({ to, data, t: Date.now() });
+        if (this.outbox.length > 60) this.outbox.shift();
+      }
+      return ok;
+    }
+    /** Вызывается, когда связь с сервером восстановилась: досылаем то, что не ушло (не старше 25 с). */
+    flushOutbox() {
+      const q = (this.outbox || []).splice(0).filter((m) => Date.now() - m.t < 25000);
+      if (q.length) ev('sig', 'повторная отправка из очереди:', q.length);
+      for (const m of q) this.sendSig(m.to, m.data);
+    }
 
     onSignal(from, name, d) {
       if (d.k !== 'ice') ev('sig<-', d.k, 'from', from);

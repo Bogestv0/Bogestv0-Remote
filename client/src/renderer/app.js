@@ -547,7 +547,7 @@
   (async function init() {
     await refreshCfg(); S.ice = await B.sig.ice();
     B.sig.onIce((ice) => { S.ice = ice; });
-    B.sig.onState((st) => { const was = S.sig.connected; S.sig = st; if (!was && st.connected) pollPresence(); if (!st.connected) S.online = new Set(); renderAll(); });
+    B.sig.onState((st) => { const was = S.sig.connected; S.sig = st; if (!was && st.connected) { pollPresence(); sess.flushOutbox(); } if (!st.connected) S.online = new Set(); renderAll(); });
     B.sig.onMsg((m) => {
       if (m.t === 'presence') { S.online = new Set(m.online); if (S.view === 'devices') renderDevices(); return; }
       sess.onServerMessage(m);

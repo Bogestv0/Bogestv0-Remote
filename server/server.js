@@ -96,8 +96,9 @@ wss.on('connection', (ws, req) => {
   const helloTimer = setTimeout(() => { if (!ws.id) ws.terminate(); }, 10000);
 
   ws.on('pong', () => { ws.alive = true; });
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     clearTimeout(helloTimer);
+    if (ws.id) log('offline', ws.id, ip, 'код', code);
     if (ws.id && online.get(ws.id) === ws) online.delete(ws.id);
   });
   ws.on('error', () => {});
@@ -131,7 +132,7 @@ wss.on('connection', (ws, req) => {
         }
         ids[id].seen = Date.now(); saveIds();
         const prev = online.get(id);
-        if (prev && prev !== ws) { prev.id = null; prev.close(4000, 'replaced'); }
+        if (prev && prev !== ws) { log('REPLACED', id, 'старое', prev.ip, '→ новое', ip); prev.id = null; prev.close(4000, 'replaced'); }
         ws.id = id; ws.name = String(m.name || '').slice(0, 64);
         online.set(id, ws);
         clearTimeout(helloTimer);
@@ -152,9 +153,10 @@ wss.on('connection', (ws, req) => {
       case 'signal': {
         if (!ID_RE.test(m.to || '')) return;
         const peer = online.get(m.to);
-        if (!peer) return send({ t: 'error', code: 'offline', to: m.to });
-        return peer.readyState === 1 &&
-          peer.send(JSON.stringify({ t: 'signal', from: ws.id, name: ws.name, data: m.data }));
+        const kind = m.data && m.data.k;
+        if (!peer || peer.readyState !== 1) { log('signal', kind, ws.id, '→', m.to, 'НЕ ДОСТАВЛЕНО: адресат не в сети'); return send({ t: 'error', code: 'offline', to: m.to }); }
+        if (kind !== 'ice') log('signal', kind, ws.id, '→', m.to);
+        return peer.send(JSON.stringify({ t: 'signal', from: ws.id, name: ws.name, data: m.data }));
       }
       default: return;
     }
