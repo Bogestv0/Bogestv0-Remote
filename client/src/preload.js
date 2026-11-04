@@ -1,0 +1,33 @@
+'use strict';
+const { contextBridge, ipcRenderer } = require('electron');
+const on = (ch, cb) => { const f = (_e, ...a) => cb(...a); ipcRenderer.on(ch, f); return () => ipcRenderer.removeListener(ch, f); };
+
+contextBridge.exposeInMainWorld('bridge', {
+  cfg: {
+    get: () => ipcRenderer.invoke('cfg:get'),
+    set: (patch) => ipcRenderer.invoke('cfg:set', patch),
+    setPassword: (pw) => ipcRenderer.invoke('cfg:setPassword', pw),
+    getSecret: () => ipcRenderer.invoke('cfg:getSecret'),
+  },
+  sig: {
+    send: (o) => ipcRenderer.invoke('sig:send', o),
+    state: () => ipcRenderer.invoke('sig:state'),
+    ice: () => ipcRenderer.invoke('sig:ice'),
+    onMsg: (cb) => on('sig:msg', cb),
+    onState: (cb) => on('sig:state', cb),
+    onIce: (cb) => on('sig:ice', cb),
+  },
+  log: { add: (e) => ipcRenderer.invoke('log:add', e) },
+  app: {
+    attention: (title, body) => ipcRenderer.invoke('app:attention', { title, body }),
+    notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
+    setActive: (v) => ipcRenderer.invoke('app:setActive', !!v),
+    copy: (t) => ipcRenderer.invoke('app:copy', String(t)),
+    readClipboard: () => ipcRenderer.invoke('app:readClipboard'),
+    onNavigate: (cb) => on('nav', cb),
+    ready: () => ipcRenderer.invoke('app:ready'),
+  },
+  screen: { source: (id) => ipcRenderer.invoke('screen:source', id), list: () => ipcRenderer.invoke('screen:list') },
+  input: { send: (ev) => ipcRenderer.send('input:ev', ev), release: () => ipcRenderer.send('input:release') },
+  admin: { start: (meta) => ipcRenderer.invoke('admin:start', meta), stop: () => ipcRenderer.invoke('admin:stop'), serviceStatus: () => ipcRenderer.invoke('service:status'), capture: (on) => ipcRenderer.send('helper:capture', on), onDesktop: (cb) => on('helper:desktop', cb), onFrame: (cb) => on('helper:frame', cb) },
+});

@@ -1,0 +1,76 @@
+{
+  "name": "bogestv0-remote",
+  "productName": "Bogestv0 REMOTE",
+  "version": "0.1.0",
+  "description": "Bogestv0 REMOTE — удалённый доступ к компьютеру",
+  "main": "src/main.js",
+  "author": "Bogestv0",
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/unit.js && node test/service.js",
+    "dist": "electron-builder --win portable nsis --x64 --publish never"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.1.0",
+    "@fontsource/manrope": "^5.1.0",
+    "@fontsource/onest": "^5.1.0",
+    "koffi": "^2.9.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.bogestv0.remote",
+    "productName": "Bogestv0 REMOTE",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**",
+      "src/helper.js",
+      "src/input.js",
+      "src/linefmt.js",
+      "src/service/**"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "artifactName": "Bogestv0-REMOTE-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Bogestv0-REMOTE-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Bogestv0-REMOTE-Portable-${version}.${ext}"
+    },
+    "extraResources": [
+      {
+        "from": "build/service",
+        "to": "service",
+        "filter": [
+          "Bogestv0Service.xml",
+          "Bogestv0Service.exe"
+        ]
+      }
+    ]
+  }
+}

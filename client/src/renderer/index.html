@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; font-src 'self'; script-src 'self'; connect-src 'self'">
+<title>Bogestv0 REMOTE</title>
+<link rel="stylesheet" href="../../node_modules/@fontsource/manrope/500.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/manrope/700.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/manrope/800.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/onest/400.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/onest/500.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/onest/600.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/400.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/500.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/600.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <div class="logo"><img src="logo.png" alt="Логотип Bogestv0"></div>
+    <div><div class="brand-name">Bogestv0</div><div class="brand-sub">REMOTE</div></div>
+  </div>
+  <div class="tabs" id="tabs">
+    <a class="tab active" data-view="devices" href="#devices">Устройства</a>
+    <a class="tab" data-view="connect" href="#connect">Подключение<span class="badge hidden" id="badge">0</span></a>
+    <a class="tab" data-view="session" href="#session">Сессия</a>
+    <a class="tab" data-view="audio" href="#audio">Звук</a>
+    <a class="tab" data-view="security" href="#security">Безопасность</a>
+  </div>
+  <div class="topbar-right">
+    <button class="status-chip" id="statusChip" title=""><span class="dot"></span><span id="statusText">…</span></button>
+    <span class="dl-chip" id="verChip">v0.1.0</span>
+    <div class="account"><span class="avatar" id="avatar">Б</span><span id="accName">Bogestv0</span></div>
+  </div>
+</div>
+<div class="wrap">
+  <div class="view active" id="view-devices"></div>
+  <div class="view" id="view-connect"></div>
+  <div class="view" id="view-session"></div>
+  <div class="view" id="view-audio"></div>
+  <div class="view" id="view-security"></div>
+</div>
+<div id="modalRoot"></div>
+<audio id="aSpk" autoplay></audio><audio id="aMic" autoplay></audio>
+<script src="session.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

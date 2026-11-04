@@ -1,0 +1,10 @@
+{
+  "name": "bogestv0-remote-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Сервер сигнализации Bogestv0 REMOTE: выдаёт ID, сводит устройства, раздаёт TURN-доступ",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "test": "node test/test.js" },
+  "dependencies": { "ws": "^8.18.0" },
+  "engines": { "node": ">=20" }
+}

@@ -1,0 +1,45 @@
+# Bogestv0 REMOTE — собственный сервер (замена RustDesk-сервера).
+#   signaling — ID, presence, пересылка WebRTC-сообщений (порт 8443/tcp, TLS с закреплением отпечатка)
+#   coturn    — TURN/STUN: relay, когда два устройства не могут соединиться напрямую
+services:
+  signaling:
+    build: .
+    container_name: bogestv0-signaling
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      PORT: "8443"
+      TURN_HOST: ${PUBLIC_IP}
+      TURN_PORT: "3478"
+      TURN_SECRET: ${TURN_SECRET}
+    volumes:
+      - ./data:/data
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: bogestv0-coturn
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - -n
+      - --log-file=stdout
+      - --realm=bogestv0-remote
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SECRET}
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --external-ip=${PUBLIC_IP}
+      - --fingerprint
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --no-tcp-relay
+      - --no-multicast-peers
+      # не даём использовать relay для доступа во внутренние сети VPS
+      - --denied-peer-ip=0.0.0.0-0.255.255.255
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
