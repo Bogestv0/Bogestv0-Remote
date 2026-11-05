@@ -38,7 +38,22 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   win.setMenuBarVisibility(false);
-  win.webContents.on('did-start-loading', () => { pending.ready = false; });
+  // Очередь «пока интерфейс грузится» включаем только при настоящей (не внутристраничной) загрузке окна.
+  // Раньше сюда попадала и смена location.hash при переходе на экран подключения: ready сбрасывался и больше не возвращался,
+  // поэтому answer и ICE-кандидаты копились в очереди и не доходили до окна зрителя.
+  win.webContents.on('did-start-navigation', (...a) => {
+    const d = a[0] || {};
+    const isMain = typeof d.isMainFrame === 'boolean' ? d.isMainFrame : a[3];
+    const same = typeof d.isSameDocument === 'boolean' ? d.isSameDocument : a[2];
+    if (isMain && !same) pending.ready = false;
+  });
+  // Страховка: если какая-то внутристраничная навигация всё же сбросила ready — возвращаем и отдаём накопленное.
+  win.webContents.on('did-navigate-in-page', () => {
+    if (pending.ready) return;
+    pending.ready = true;
+    const now = Date.now();
+    for (const q of pending.queue.splice(0)) if (now - q.t < 30000) win.webContents.send(q.ch, q.payload);
+  });
   win.loadFile(R('index.html'));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
