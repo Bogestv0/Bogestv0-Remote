@@ -9,8 +9,14 @@ contextBridge.exposeInMainWorld('bridge', {
     setPassword: (pw) => ipcRenderer.invoke('cfg:setPassword', pw),
     getSecret: () => ipcRenderer.invoke('cfg:getSecret'),
   },
+  dev: {
+    savePw: (id, pw, admin) => ipcRenderer.invoke('dev:savePw', id, pw, admin),
+    getPw: (id) => ipcRenderer.invoke('dev:getPw', id),
+    clearPw: (id) => ipcRenderer.invoke('dev:clearPw', id),
+  },
   sig: {
     send: (o) => ipcRenderer.invoke('sig:send', o),
+    reconnect: () => ipcRenderer.invoke('sig:reconnect'),
     state: () => ipcRenderer.invoke('sig:state'),
     ice: () => ipcRenderer.invoke('sig:ice'),
     onMsg: (cb) => on('sig:msg', cb),
@@ -26,6 +32,7 @@ contextBridge.exposeInMainWorld('bridge', {
   log: { add: (e) => ipcRenderer.invoke('log:add', e) },
   app: {
     attention: (title, body) => ipcRenderer.invoke('app:attention', { title, body }),
+    chatNotify: (title, body) => ipcRenderer.invoke('app:chatNotify', { title, body }),
     notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
     setActive: (v) => ipcRenderer.invoke('app:setActive', !!v),
     copy: (t) => ipcRenderer.invoke('app:copy', String(t)),

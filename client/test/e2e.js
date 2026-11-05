@@ -19,10 +19,11 @@ const INIT = `(() => {
   const call = (m, ...a) => window.__bridge(m, a);
   window.bridge = {
     cfg: { get: () => call('cfg.get'), set: (p) => call('cfg.set', p), setPassword: (p) => call('cfg.setPassword', p), getSecret: () => call('cfg.getSecret') },
-    sig: { send: (o) => call('sig.send', o), state: () => call('sig.state'), ice: () => call('sig.ice'), onMsg: (cb) => on('sig:msg', cb), onState: (cb) => on('sig:state', cb), onIce: (cb) => on('sig:ice', cb) },
+    sig: { reconnect: () => call('sig.reconnect'), send: (o) => call('sig.send', o), state: () => call('sig.state'), ice: () => call('sig.ice'), onMsg: (cb) => on('sig:msg', cb), onState: (cb) => on('sig:state', cb), onIce: (cb) => on('sig:ice', cb) },
     updater: { state: () => call('updater.state'), check: () => call('updater.check'), update: () => call('updater.update'), onState: (cb) => on('updater:state', cb) },
+    dev: { savePw: (id, pw, admin) => call('dev.savePw', id, pw, admin), getPw: (id) => call('dev.getPw', id), clearPw: (id) => call('dev.clearPw', id) },
     log: { add: (e) => call('log.add', e) },
-    app: { readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), onNavigate: (cb) => on('nav', cb), onKick: (cb) => on('app:kick', cb) },
+    app: { chatNotify: (t, b) => call('app.chatNotify', t, b), readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), onNavigate: (cb) => on('nav', cb), onKick: (cb) => on('app:kick', cb) },
     screen: { source: (id) => call('screen.source', id), list: () => call('screen.list') },
     input: { send: (ev) => { call('input.send', ev); }, release: () => { call('input.release'); } },
     win: { hide: () => call('win.hide'), setFullScreen: (on) => call('win.fs', on), onFullscreen: (cb) => on('win:fs-state', cb) },
@@ -42,7 +43,7 @@ const INIT = `(() => {
 
 class Peer {
   constructor(browser, name, port) { (global.PEERS = global.PEERS || []).push(this); this.name = name; this.port = port; this.browser = browser; this.id = String(100000000 + crypto.randomInt(0, 899999999)); this.token = crypto.randomBytes(32).toString('hex');
-    this.cfg = { id: this.id, name, hostname: name, version: '0.1.0', platform: 'win32', unattended: false, hasPassword: false, allowedIds: [], autostart: false, minimizeToTray: true, server: { host: '127.0.0.1', port, fingerprint: '' }, devices: [], log: [], injector: true };
+    this.cfg = { id: this.id, name, hostname: name, version: '0.1.0', platform: 'win32', savedDevices: {}, autostartState: { supported: true, set: true, willLaunch: true }, customServer: false, custom: { host: '', port: 8443, fingerprint: '' }, unattended: false, hasPassword: false, allowedIds: [], autostart: false, minimizeToTray: true, server: { host: '127.0.0.1', port, fingerprint: '' }, devices: [], log: [], injector: true };
     this.password = ''; this.inputs = []; this.releases = 0; this.adminStarts = 0; this.adminResult = { ok: true }; this.attention = []; this.notifies = []; this.ice = []; this.sigState = { connected: false, id: this.id, error: '' }; this.sigQueue = []; }
   async start() {
     this.ctx = await this.browser.newContext({ viewport: { width: 1100, height: 800 } });
@@ -90,6 +91,10 @@ class Peer {
       case 'admin.start': this.adminStarts++; this.adminMeta = a[0]; return this.adminResult;
       case 'admin.stop': return true;
       case 'updater.state': return { status: 'idle', canAuto: false };
+      case 'app.chatNotify': (this.chatNotifies = this.chatNotifies || []).push(a); return;
+      case 'dev.savePw': this.devPw = this.devPw || {}; this.devPw[a[0]] = { pw: a[1], admin: !!a[2] }; this.cfg.savedDevices = { ...(this.cfg.savedDevices || {}), [a[0]]: { admin: !!a[2] } }; return true;
+      case 'dev.getPw': return (this.devPw || {})[a[0]] || null;
+      case 'dev.clearPw': if (this.devPw) delete this.devPw[a[0]]; if (this.cfg.savedDevices) delete this.cfg.savedDevices[a[0]]; return true;
       case 'win.hide': this.hides = (this.hides || 0) + 1; return;
       case 'win.fs': this.fsCalls = [...(this.fsCalls || []), !!a[0]]; return;
       default: return;
@@ -211,6 +216,53 @@ const outEnded = async (v, reason) => { let last = '';
     for (let i = 0; i <= 40; i++) await V.page.mouse.move(bx.x + 100 + i * 5, bx.y + 100 + i * 2);
     await until(() => { const m = H.inputs.filter((e) => e.k === 'mm'); const l = m[m.length - 1]; return l && H.inputs.length - n0 >= 3 && Math.abs(l.y - ((bx.y + 180 - (bx.y + (bx.height - Math.min(bx.width / 640, bx.height / 360) * 360) / 2)) / (Math.min(bx.width / 640, bx.height / 360) * 360))) < 0.02; }, 4000, 'последнее положение мыши дошло до хоста');
     ok('быстрое движение мыши: отправлено ' + (H.inputs.length - n0) + ' событий, последнее положение дошло'); }
+
+  // пункт 12: звук реально идёт (байты аудио приходят), стерео/128 кбит/с запрошены в SDP, ползунок громкости работает
+  const audioBytes = () => V.page.evaluate(async () => { const rep = await window.__sess.outgoing.pc.getStats(); let b = 0; rep.forEach((r) => { if (r.type === 'inbound-rtp' && r.kind === 'audio') b += r.bytesReceived || 0; }); return b; });
+  const ab0 = await audioBytes(); await sleep(1200);
+  assert((await audioBytes()) > ab0 + 500, 'звук динамиков должен реально приходить (байты аудио растут)');
+  assert(await V.page.evaluate(() => window.__sess.outgoing.offerSdp.includes('stereo=1') && window.__sess.outgoing.offerSdp.includes('maxaveragebitrate=128000')), 'в SDP зрителя должны быть параметры качественного Opus');
+  assert(await H.page.evaluate(() => window.__sess.incoming.offerSdp.includes('stereo=1')));
+  await V.page.evaluate(() => (location.hash = 'audio')); await until(() => V.page.$('[data-vol=spk]'), 3000, 'ползунок громкости');
+  await V.page.locator('[data-vol=spk]').evaluate((el) => { el.value = '35'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  assert.equal(Math.round((await V.page.evaluate(() => document.getElementById('aSpk').volume)) * 100), 35);
+  // выбор источника звука: любое устройство ввода хоста и обратно — весь системный звук
+  const hostSrc = () => H.page.evaluate(() => { const s = window.__sess.incoming; return { live: s.spkTrack.readyState === 'live', sent: s.sSender.track === s.spkTrack, id: s.spkTrack.id }; });
+  const id0 = (await hostSrc()).id;
+  assert.deepEqual(await V.page.$$eval('#spkSrc option', (o) => o.map((x) => x.value)), ['system', 'm1']);
+  await V.page.selectOption('#spkSrc', 'm1');
+  await until(async () => (await V.S("S.out.spkSrc")) === 'm1' && (await hostSrc()).id !== id0, 6000, 'источник звука переключён на устройство');
+  assert.deepEqual({ ...(await hostSrc()), id: 0 }, { live: true, sent: true, id: 0 });
+  const ab1 = await audioBytes(); await sleep(1200); assert((await audioBytes()) > ab1 + 500, 'звук с выбранного устройства должен идти');
+  assert(H.cfg.log.some((e) => e.kind === 'audio'), 'смена источника звука попала в журнал хоста');
+  await V.page.evaluate(() => (location.hash = 'audio')); await until(() => V.page.$eval('#spkSrc', (el) => el.value === 'm1'), 3000, 'выбранный источник остаётся выбранным');
+  await V.page.selectOption('#spkSrc', 'system');
+  await until(async () => (await V.S("S.out.spkSrc")) === 'system', 6000, 'обратно на системный звук');
+  const ab2 = await audioBytes(); await sleep(1200); assert((await audioBytes()) > ab2 + 500, 'системный звук снова идёт');
+  await V.page.click('[data-action=a-refresh-dev]'); await sleep(300);
+  await V.page.evaluate(() => (location.hash = 'session'));
+  ok('пункт 12: источник звука выбирается (системный / любое устройство ввода хоста), звук идёт с выбранного, смена — в журнале хоста');
+  ok('пункт 12: звук идёт (байты растут), Opus стерео 128 кбит/с запрошен, ползунок громкости меняет громкость');
+
+  // пункт 7: чат в обе стороны
+  await V.page.click('[data-action=t-chat]');
+  assert(await V.page.locator('#stage .chat').isVisible(), 'панель чата открывается справа');
+  const cb = await V.page.locator('#stage .chat').boundingBox(); const wb = await V.page.locator('#stageWrap').boundingBox();
+  assert(cb.x > wb.x, 'чат справа от экрана');
+  await V.page.fill('#chatIn-out', 'привет с MacBook'); await V.page.press('#chatIn-out', 'Enter');
+  await until(() => H.page.evaluate(() => [...document.querySelectorAll('#chatLog-in .chat-bubble')].some((b) => b.textContent === 'привет с MacBook')), 6000, 'сообщение зрителя дошло до хоста');
+  await H.page.evaluate(() => (location.hash = 'session'));
+  await H.page.fill('#chatIn-in', 'ответ хоста'); await H.page.press('#chatIn-in', 'Enter');
+  await until(() => V.page.evaluate(() => [...document.querySelectorAll('#chatLog-out .chat-bubble')].some((b) => b.textContent === 'ответ хоста')), 6000, 'ответ хоста дошёл до зрителя');
+  { const sh = path.join(__dirname, 'shots'); fs.mkdirSync(sh, { recursive: true }); await V.page.screenshot({ path: path.join(sh, 'viewer-chat.png') }); await H.page.screenshot({ path: path.join(sh, 'host-chat.png') }); }
+  // текст в поле ввода переживает перерисовку окна сессии и скрипты в сообщениях не исполняются
+  await V.page.fill('#chatIn-out', 'черновик');
+  await V.page.evaluate(() => window.__emit('sig:msg', { t: 'noop' })); await V.page.click('[data-action=t-control]'); await V.page.click('[data-action=t-control]');
+  assert.equal(await V.page.inputValue('#chatIn-out'), 'черновик');
+  await V.page.fill('#chatIn-out', '<img src=x onerror=window.__xss=1>'); await V.page.press('#chatIn-out', 'Enter'); await sleep(300);
+  assert.equal(await H.page.evaluate(() => window.__xss), undefined); assert.equal(await V.page.evaluate(() => window.__xss), undefined);
+  await V.page.fill('#chatIn-out', ''); await V.page.click('[data-action=t-chat]');
+  ok('пункт 7: чат справа, сообщения идут в обе стороны, черновик не пропадает, HTML в сообщениях не исполняется');
 
   // микрофон
   await V.page.click('[data-action=t-mic]');
@@ -344,6 +396,48 @@ const outEnded = async (v, reason) => { let last = '';
   await uiConnect(V, H, { mode: 'password', password: PW });
   await outEnded(V, 'Слишком много');
   ok('после 5 неверных паролей ID блокируется на 10 минут (даже с верным паролем)');
+
+  // ---- пункт 12: состояние автозапуска из Windows показывается в «Безопасность»
+  { await V.page.evaluate(() => { window.__S.cfg.autostart = true; location.hash = 'security'; }); await sleep(300);
+    assert((await V.page.textContent('#view-security')).includes('запись в автозагрузке Windows есть'));
+    await V.page.evaluate(() => { window.__S.cfg.autostartState = { supported: true, set: true, willLaunch: false }; window.__S.cfg.autostart = true; location.hash = 'devices'; location.hash = 'security'; }); await sleep(300);
+    assert((await V.page.textContent('#view-security')).includes('Windows отключил автозапуск'));
+    ok('пункт 12: автозапуск — реальное состояние из Windows (в т.ч. «отключён в Диспетчере задач») видно в настройках'); }
+
+  // ---- пункт 10: кнопка «Обновить» перепроверяет, кто в сети
+  await V.page.evaluate(() => (location.hash = 'devices'));
+  await until(() => V.page.$('[data-action=refresh]'), 4000, 'кнопка Обновить');
+  const at0 = await V.S('S.presenceAt'); await sleep(50);
+  await V.page.click('[data-action=refresh]');
+  await until(async () => (await V.S('S.presenceAt')) > at0 && !(await V.S('S.refreshing')), 6000, 'presence обновлён по кнопке');
+  ok('пункт 10: «Обновить» заново проверяет, какие устройства в сети');
+
+  // ---- пункт 9: сохранение пароля и вход одной кнопкой
+  { const Vs = new Peer(browser, 'Saver', PORT); await Vs.start(); Vs.cfg.devices = [{ id: H.id, name: 'Рабочий ПК' }]; await Vs.reload();
+    const cardBtn = `[data-action=connect][data-id="${H.id}"]:not([disabled])`;
+    await until(() => Vs.page.$(cardBtn), 15000, 'кнопка подключения');
+    await Vs.page.click(cardBtn); await Vs.page.click('.radio-card[data-mode=password]'); await Vs.page.fill('#mPw', PW);
+    assert.equal(await Vs.page.isChecked('#mRemember'), false); await Vs.page.check('#mRemember'); await Vs.page.click('.modal [data-ok]');
+    await until(async () => Vs.S("S.out && S.out.state === 'active'"), 25000, 'вход с сохранением пароля');
+    assert.equal(Vs.devPw[H.id].pw, PW);
+    await Vs.page.evaluate(() => window.__sess.hangup()); await until(async () => !(await H.S('!!S.inSess')), 8000, 'host закрыл'); await sleep(500);
+    // второй раз: одна кнопка, без диалога
+    await Vs.page.evaluate(() => (location.hash = 'devices'));
+    await until(() => Vs.page.$(cardBtn), 15000, 'кнопка подключения (2)');
+    assert((await Vs.page.textContent('.device-meta')).length > 0);
+    await Vs.page.click(cardBtn);
+    await until(async () => Vs.S("S.out && S.out.state === 'active'"), 25000, 'вход по сохранённому паролю без диалога');
+    assert.equal(await Vs.page.locator('.modal').count(), 0, 'диалога быть не должно');
+    ok('пункт 9: пароль сохранён, повторное подключение — одной кнопкой, без диалога и ввода пароля');
+    await Vs.page.evaluate(() => window.__sess.hangup()); await until(async () => !(await H.S('!!S.inSess')), 8000, 'host закрыл (2)'); await sleep(500);
+    // хозяин сменил пароль → сохранённый не подходит: забывается и открывается диалог
+    H.password = 'completely-new-pass-7';
+    await Vs.page.evaluate(() => (location.hash = 'devices'));
+    await until(() => Vs.page.$(cardBtn), 15000, 'кнопка подключения (3)'); await Vs.page.click(cardBtn);
+    await until(() => Vs.page.$('.modal .edgebar'), 25000, 'диалог после неверного сохранённого пароля');
+    assert(!Vs.devPw[H.id], 'устаревший пароль должен быть забыт');
+    ok('если сохранённый пароль устарел — он забывается и открывается диалог для нового');
+    await Vs.close(); H.password = PW; }
 
   // ---- скриншоты интерфейса
   const shots = path.join(__dirname, 'shots'); fs.mkdirSync(shots, { recursive: true });

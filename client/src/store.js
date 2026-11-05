@@ -15,7 +15,10 @@ const DEFAULTS = {
   minimizeToTray: true,
   hideOnConnect: true,       // когда к этому компьютеру подключились — убрать окно программы в трей (не мешает на удалённом экране)
   relayOnly: true,           // соединять только через TURN-сервер (устойчиво к разным NAT); можно выключить в «Безопасность»
-  server: { host: '46.226.166.141', port: 8443, fingerprint: '' },
+  server: { host: '46.226.166.141', port: 8443, fingerprint: '' },   // встроенный сервер: в интерфейсе не показывается
+  customServer: false,       // true — использовать свой сервер из custom
+  custom: { host: '', port: 8443, fingerprint: '' },
+  devicePw: {},              // сохранённые пароли для подключения к устройствам: id -> { pw (зашифрован), admin }
   devices: [],               // [{id, name}]
   log: [],                   // журнал подключений
 };
@@ -29,6 +32,11 @@ class Store {
       const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       Object.assign(this.data, saved);
       this.data.server = { ...DEFAULTS.server, ...(saved.server || {}) };
+      this.data.custom = { ...DEFAULTS.custom, ...(saved.custom || {}) };
+      // Раньше адрес сервера можно было менять в «Безопасность → Сервер»: если он отличается от встроенного — это «свой сервер».
+      if (saved.customServer === undefined && saved.server && saved.server.host && saved.server.host !== DEFAULTS.server.host) {
+        this.data.customServer = true; this.data.custom = { ...DEFAULTS.custom, ...saved.server }; this.data.server = { ...DEFAULTS.server };
+      }
     } catch { /* первый запуск */ }
     if (!/^\d{9}$/.test(this.data.id)) this.newIdentity();
     this.save();
@@ -49,22 +57,19 @@ class Store {
       fs.renameSync(this.file + '.tmp', this.file);
     } catch (e) { console.error('config save failed', e); }
   }
-  // то, что можно отдавать в интерфейс (без токена и пароля)
+  /** Сервер, с которым приложение работает сейчас: свой (если включён и задан) или встроенный. */
+  active() { return this.data.customServer && this.data.custom.host ? this.data.custom : this.data.server; }
+  // то, что можно отдавать в интерфейс (без токена, паролей и адреса встроенного сервера)
   publicView() {
-    const { token, passwordEnc, ...rest } = this.data;
-    return { ...rest, hasPassword: !!passwordEnc };
+    const { token, passwordEnc, server, custom, devicePw, ...rest } = this.data;
+    const savedDevices = {}; for (const [id, v] of Object.entries(devicePw || {})) savedDevices[id] = { admin: !!v.admin };
+    return { ...rest, hasPassword: !!passwordEnc, savedDevices, custom: { ...custom } };
   }
-  setPassword(pw) {
-    if (!pw) { this.data.passwordEnc = ''; return this.save(); }
-    if (this.safe && this.safe.isEncryptionAvailable()) {
-      this.data.passwordEnc = 'e:' + this.safe.encryptString(pw).toString('base64');
-    } else {
-      this.data.passwordEnc = 'p:' + Buffer.from(pw, 'utf8').toString('base64');
-    }
-    this.save();
+  _enc(pw) {
+    if (this.safe && this.safe.isEncryptionAvailable()) return 'e:' + this.safe.encryptString(pw).toString('base64');
+    return 'p:' + Buffer.from(pw, 'utf8').toString('base64');
   }
-  getPassword() {
-    const v = this.data.passwordEnc;
+  _dec(v) {
     if (!v) return '';
     try {
       if (v.startsWith('e:')) return this.safe.decryptString(Buffer.from(v.slice(2), 'base64'));
@@ -72,6 +77,16 @@ class Store {
     } catch { /* повреждено */ }
     return '';
   }
+  setPassword(pw) {
+    if (!pw) { this.data.passwordEnc = ''; return this.save(); }
+    this.data.passwordEnc = this._enc(pw);
+    this.save();
+  }
+  getPassword() { return this._dec(this.data.passwordEnc); }
+  // пароли для подключения к чужим устройствам (чтобы не вводить каждый раз)
+  setDevicePw(id, pw, admin) { this.data.devicePw[id] = { pw: this._enc(pw), admin: !!admin }; this.save(); }
+  getDevicePw(id) { const v = this.data.devicePw[id]; if (!v) return null; const pw = this._dec(v.pw); return pw ? { pw, admin: !!v.admin } : null; }
+  clearDevicePw(id) { delete this.data.devicePw[id]; this.save(); }
   addLog(entry) {
     this.data.log.unshift({ ...entry, ts: Date.now() });
     const cutoff = Date.now() - 90 * 86400e3;

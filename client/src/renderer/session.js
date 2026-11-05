@@ -40,6 +40,16 @@
     let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0;
   }
 
+  /** Opus по умолчанию в WebRTC — узкий моно-поток для голоса (~32 кбит/с): музыка и системные звуки звучат плохо.
+   *  Просим у собеседника стерео и до 128 кбит/с (параметры приёмника в SDP; отпечатки DTLS не затрагиваются). */
+  function tuneOpus(sdp) {
+    const m = /a=rtpmap:(\d+) opus\/48000\/2/i.exec(sdp || ''); if (!m) return sdp;
+    return sdp.replace(new RegExp('^a=fmtp:' + m[1] + ' ([^\\r\\n]*)', 'gm'), (_l, params) => {
+      const kv = new Map(params.split(';').map((x) => x.trim()).filter(Boolean).map((x) => { const i = x.indexOf('='); return i < 0 ? [x, undefined] : [x.slice(0, i), x.slice(i + 1)]; }));
+      kv.set('stereo', '1'); kv.set('sprop-stereo', '1'); kv.set('maxaveragebitrate', '128000'); kv.set('useinbandfec', '1');
+      return 'a=fmtp:' + m[1] + ' ' + [...kv].map(([k, v]) => (v === undefined ? k : k + '=' + v)).join(';');
+    });
+  }
   async function defaultCapture(bridge, displayId) {
     const src = await bridge.screen.source(displayId);
     if (!src) throw new Error('Нет источника экрана');
@@ -47,7 +57,7 @@
     const video = { mandatory: { ...base, maxFrameRate: 60, maxWidth: src.width, maxHeight: src.height } };
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: { mandatory: base }, video }); }
-    catch { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video }); }
+    catch (e) { ev('capture', 'системный звук недоступен, передаём только видео:', e && (e.name || e.message)); stream = await navigator.mediaDevices.getUserMedia({ audio: false, video }); }
     const v = stream.getVideoTracks()[0];
     try { v.contentHint = 'motion'; } catch {}   // 'motion' = плавность (раньше 'detail' — резкость текста, но ниже частота кадров)
     return { video: v, audio: stream.getAudioTracks()[0] || null, width: src.width, height: src.height, displayId: src.displayId };
@@ -256,9 +266,12 @@
           case 'admin-req': return this.hostAdmin(s);
           case 'mic': return this.hostMic(s, !!m.on, m.deviceId);
           case 'spk': return this.hostSpk(s, !!m.on);
+          case 'spk-src': return this.hostSpkSource(s, String(m.id || 'system'), m.on !== false);
+          case 'devices': return s.sendCtl({ k: 'devices', mics: await listMics() });
           case 'monitor': return this.hostMonitor(s, String(m.id));
           case 'clip-set': return this.hostClipSet(s, m.text);
           case 'clip-get': return this.hostClipGet(s);
+          case 'chat': return this.hostChat(s, m.text);
           case 'bye': return this.endIn('peer-left', false);
           default: return this.hostInput(s, m);
         }
@@ -289,6 +302,7 @@
         if (cap.audio) { s.spkOn = true; await s.sSender.replaceTrack(cap.audio); }
         s.state = 'active'; s.perms.control = true; s.startedAt = Date.now();
         s.monitors = await this.bridge.screen.list().catch(() => []);
+        ev('host', 'захват экрана готов; системный звук:', cap.audio ? 'есть' : 'НЕТ');
         s.sendCtl({ k: 'granted', info: { monitors: s.monitors, monitor: cap.displayId || (s.monitors.find((m) => m.primary) || {}).id, w: cap.width, h: cap.height, name: this.hooks.getCfg().name, hasAudio: !!cap.audio, mics: await listMics(), control: true } });
         this.bridge.app.setActive(true);
         this.hooks.log({ who: s.name, id: s.from, kind: s.mode === 'password' ? 'password' : 'ask', note: s.mode === 'password' ? 'без подтверждения' : 'запрос подтверждён' });
@@ -357,8 +371,31 @@
       } catch (e) { s.sendCtl({ k: 'mic', on: false, ok: false, reason: String(e.message || e) }); }
     }
     async hostSpk(s, on) {
-      if (!s.spkTrack) return;
-      s.spkOn = on; await s.sSender.replaceTrack(on ? s.spkTrack : null);
+      s.spkOn = on; if (!s.spkTrack) return;
+      await s.sSender.replaceTrack(on ? s.spkTrack : null);
+    }
+    /** Источник звука «динамиков»: 'system' — весь системный звук компьютера, иначе — любое устройство ввода (микрофон, «Стерео микшер»,
+     *  линейный вход, виртуальный кабель). Захватить звук конкретного устройства ВЫВОДА браузерный движок не умеет — для этого есть виртуальные кабели. */
+    async hostSpkSource(s, id, on) {
+      try {
+        let track;
+        if (id === 'system') {
+          const cap = await this.capture(s.cap && s.cap.displayId);   // видео нужно движку для захвата системного звука — сразу останавливаем
+          try { cap.video && cap.video.stop(); } catch {}
+          if (!cap.audio) throw new Error('системный звук недоступен на этом компьютере');
+          track = cap.audio;
+        } else {
+          // обработка голоса (эхо, шумоподавление, АРУ) для музыки и линейных входов вредна — выключаем; просим стерео
+          const st = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: id }, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 }, video: false });
+          track = st.getAudioTracks()[0]; if (!track) throw new Error('устройство не отдаёт звук');
+        }
+        const old = s.spkTrack; s.spkTrack = track; s.tracks.push(track); s.spkOn = on;
+        await s.sSender.replaceTrack(on ? track : null);
+        if (old) { try { old.stop(); } catch {} s.tracks = s.tracks.filter((t) => t !== old); }
+        ev('host', 'источник звука:', id === 'system' ? 'системный звук' : 'устройство ввода');
+        this.hooks.log({ who: s.name, id: s.from, kind: 'audio', note: id === 'system' ? 'источник звука: системный звук' : 'источник звука: устройство ввода' });
+        s.sendCtl({ k: 'spk-src', ok: true, id });
+      } catch (e) { ev('host', 'источник звука: ошибка', e && (e.name || e.message)); s.sendCtl({ k: 'spk-src', ok: false, id, reason: String((e && e.message) || e) }); }
     }
     async hostMonitor(s, id) {
       try {
@@ -371,6 +408,14 @@
         s.sendCtl({ k: 'monitor', ok: true, id, w: cap.width, h: cap.height });
       } catch (e) { s.sendCtl({ k: 'monitor', ok: false, id, reason: String(e.message || e) }); }
     }
+    /** Сообщение чата от зрителя. Только в активной сессии; не больше 20 сообщений за 10 секунд. */
+    hostChat(s, text) {
+      if (typeof text !== 'string' || !text.trim() || text.length > 2000) return;
+      const now = Date.now(); s.chatTimes = (s.chatTimes || []).filter((t) => now - t < 10000);
+      if (s.chatTimes.length >= 20) return; s.chatTimes.push(now);
+      this.hooks.onIn({ type: 'chat', sess: this.pub(s), text });
+    }
+    sendChatHost(text) { const s = this.incoming; if (!s || s.state !== 'active' || !s.sendCtl) return false; s.sendCtl({ k: 'chat', text: String(text).slice(0, 2000) }); return true; }
     hostClipSet(s, text) {
       if (typeof text !== 'string' || text.length > 200000) return s.sendCtl({ k: 'clip-ack', ok: false });
       this.bridge.app.copy(text);
@@ -450,6 +495,7 @@
         pc.onconnectionstatechange = () => this.onConnState(s, () => this.endOut('lost'));
         this.viewerCtl(s);
         const offer = await pc.createOffer();
+        offer.sdp = tuneOpus(offer.sdp);
         await pc.setLocalDescription(offer);
         s.offerSdp = pc.localDescription.sdp;
         this.sendSig(id, { k: 'offer', sid: s.sid, sdp: pc.localDescription.sdp, meta: { name: this.hooks.getCfg().name, mode: s.mode, admin: s.wantAdmin } });
@@ -499,6 +545,9 @@
           case 'monitor': return this.hooks.onOut({ type: 'monitor', to: s.to, ok: !!m.ok, id: m.id, w: m.w, h: m.h, reason: m.reason || '' });
           case 'clip': return this.hooks.onOut({ type: 'clip', to: s.to, text: String(m.text || '') });
           case 'clip-ack': return this.hooks.onOut({ type: 'clip-ack', to: s.to, ok: !!m.ok });
+          case 'chat': if (typeof m.text === 'string' && m.text.trim() && m.text.length <= 2000) this.hooks.onOut({ type: 'chat', to: s.to, text: m.text }); return;
+          case 'spk-src': return this.hooks.onOut({ type: 'spk-src', to: s.to, ok: !!m.ok, id: m.id, reason: m.reason || '' });
+          case 'devices': return this.hooks.onOut({ type: 'devices', to: s.to, mics: Array.isArray(m.mics) ? m.mics.slice(0, 40).map((x) => ({ id: String(x.id), label: String(x.label).slice(0, 80) })) : [] });
           case 'mic': return this.hooks.onOut({ type: 'mic', to: s.to, on: !!m.on, ok: m.ok !== false, reason: m.reason || '' });
           case 'bye': return this.endOut(String(m.reason || 'ended'), false);
         }
@@ -527,11 +576,14 @@
       const s = this.outgoing; if (!s || s.state !== 'active') return;
       if (ev.k === 'mm' && s.mv.readyState === 'open') s.mv.send(JSON.stringify(ev)); else s.send(ev);
     }
+    sendChat(text) { const s = this.outgoing; if (!s || s.state !== 'active') return false; s.send({ k: 'chat', text: String(text).slice(0, 2000) }); return true; }
     sendMonitor(id) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'monitor', id: String(id) }); }
     async clipSend() { const s = this.outgoing; if (!s || s.state !== 'active') return; const text = await this.bridge.app.readClipboard(); if (!text) return this.hooks.onOut({ type: 'clip-empty', to: s.to }); s.send({ k: 'clip-set', text }); }
     clipGet() { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'clip-get' }); }
     requestAdmin() { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'admin-req' }); }
     setMic(on, deviceId) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'mic', on, deviceId }); }
+    setSpeakerSource(id, on) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'spk-src', id, on }); }
+    refreshDevices() { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'devices' }); }
     setSpeakers(on) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'spk', on }); }
     hangup() { this.endOut('kicked-by-me'); }
     endOut(reason, tellPeer = true) {
@@ -548,5 +600,6 @@
   }
   RemoteSession.proof = proof;
   RemoteSession.fpOf = fpOf;
+  RemoteSession.tuneOpus = tuneOpus;
   window.RemoteSession = RemoteSession;
 })();

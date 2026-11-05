@@ -28,7 +28,7 @@ class Signaling extends EventEmitter {
   setState(p) { this.state = { ...this.state, ...p }; this.emit('state', this.state); }
 
   connect() {
-    const { host, port, fingerprint } = this.store.data.server;
+    const { host, port } = this.store.active();
     const url = `wss://${host}:${port}`;
     let ws;
     try {
@@ -40,7 +40,7 @@ class Signaling extends EventEmitter {
     ws.on('open', () => {
       const cert = ws._socket && ws._socket.getPeerCertificate && ws._socket.getPeerCertificate();
       const fp = cert && cert.fingerprint256;
-      const pinned = this.store.data.server.fingerprint;
+      const pinned = this.store.active().fingerprint;
       if (!fp) { ws.terminate(); return this.setState({ connected: false, error: 'Сервер не предъявил сертификат' }); }
       if (pinned && pinned.toUpperCase() !== fp.toUpperCase()) {
         ws.terminate();
@@ -49,7 +49,7 @@ class Signaling extends EventEmitter {
         return;
       }
       if (!pinned) { // доверие при первом подключении (TOFU)
-        this.store.data.server.fingerprint = fp; this.store.save();
+        this.store.active().fingerprint = fp; this.store.save();
         this.emit('fingerprint-learned', fp);
       }
       this.diag('сокет открыт, отправляю hello');

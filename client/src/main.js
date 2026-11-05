@@ -92,13 +92,19 @@ function setTrayActive(active) {
   tray.setImage(nativeImage.createFromPath(trayIcon(active)));
   tray.setToolTip(active ? 'Bogestv0 REMOTE — идёт подключение' : 'Bogestv0 REMOTE — в сети');
 }
+const LOGIN_ARGS = ['--hidden'];
+const loginPath = () => process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
 function applyAutostart() {
   if (!app.isPackaged) return; // из исходников не трогаем автозагрузку
-  app.setLoginItemSettings({
-    openAtLogin: !!store.data.autostart,
-    path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath,
-    args: ['--hidden'],
-  });
+  app.setLoginItemSettings({ openAtLogin: !!store.data.autostart, path: loginPath(), args: LOGIN_ARGS });
+}
+/** Что реально записано в Windows: set — запись в автозагрузке есть; willLaunch — и Windows её не отключил (Диспетчер задач → Автозагрузка). */
+function autostartStatus() {
+  if (!app.isPackaged || process.platform !== 'win32') return { supported: false };
+  try {
+    const s = app.getLoginItemSettings({ path: loginPath(), args: LOGIN_ARGS });
+    return { supported: true, set: !!s.openAtLogin, willLaunch: s.executableWillLaunchAtLogin !== false };
+  } catch { return { supported: true, set: false, willLaunch: false }; }
 }
 
 // ---------------------------------------------------------------- администратор (UAC)
@@ -233,13 +239,15 @@ function inject(ev) {
 
 // ---------------------------------------------------------------- IPC
 function registerIpc() {
-  const state = () => ({ ...sig.state, fingerprint: store.data.server.fingerprint });
+  // отпечаток показываем только для СВОЕГО сервера; встроенный остаётся скрытым
+  const fpView = () => (store.data.customServer ? store.active().fingerprint : '');
+  const state = () => ({ ...sig.state, fingerprint: fpView() });
   ipcMain.handle('cfg:get', () => ({
     ...store.publicView(), hostname: os.hostname(), version: app.getVersion(), platform: process.platform,
-    injector: injector.available, sig: state(),
+    injector: injector.available, sig: state(), autostartState: autostartStatus(),
   }));
   ipcMain.handle('cfg:set', async (_e, patch) => {
-    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'relayOnly', 'devices', 'server', 'name', 'passwordAdmin', 'hideOnConnect'];
+    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'relayOnly', 'devices', 'server', 'name', 'passwordAdmin', 'hideOnConnect', 'customServer'];
     let restart = false; let warn = '';
     for (const k of Object.keys(patch || {})) {
       if (!allowed.includes(k)) continue;
@@ -254,16 +262,26 @@ function registerIpc() {
         }
         store.data.passwordAdmin = on; continue;
       }
-      if (k === 'server') {
+      if (k === 'server') {   // адрес СВОЕГО сервера; встроенный через интерфейс не читается и не меняется
         const s = patch.server || {};
         const host = String(s.host || '').trim(); const port = Number(s.port);
         if (!host || !(port > 0 && port < 65536)) return { ok: false, error: 'Неверный адрес или порт сервера' };
         const fp = String(s.fingerprint || '').trim().toUpperCase();
         if (fp && !/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(fp)) return { ok: false, error: 'Отпечаток: 32 пары hex через двоеточие (SHA-256)' };
-        store.data.server = { host, port, fingerprint: fp }; restart = true; continue;
+        store.data.custom = { host, port, fingerprint: fp }; store.data.customServer = true; restart = true; continue;
+      }
+      if (k === 'customServer') {
+        const on = patch[k] === true;
+        if (on && !store.data.custom.host) return { ok: false, error: 'Сначала укажите адрес своего сервера' };
+        if (on !== store.data.customServer) { store.data.customServer = on; restart = true; }
+        continue;
       }
       if (k === 'allowedIds') { store.data.allowedIds = (patch.allowedIds || []).map(String).filter((x) => /^\d{9}$/.test(x)); continue; }
-      if (k === 'devices') { store.data.devices = (patch.devices || []).filter((d) => /^\d{9}$/.test(d.id)).map((d) => ({ id: d.id, name: String(d.name || d.id).slice(0, 48) })); continue; }
+      if (k === 'devices') {
+        store.data.devices = (patch.devices || []).filter((d) => /^\d{9}$/.test(d.id)).map((d) => ({ id: d.id, name: String(d.name || d.id).slice(0, 48) }));
+        for (const id of Object.keys(store.data.devicePw)) if (!store.data.devices.some((d) => d.id === id)) delete store.data.devicePw[id];   // убрали устройство — забыли и пароль
+        continue;
+      }
       store.data[k] = patch[k];
     }
     store.save(); applyAutostart();
@@ -278,6 +296,12 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('cfg:getSecret', () => store.getPassword());
+  // сохранённые пароли для входа на другие устройства
+  const okId = (id) => /^\d{9}$/.test(String(id));
+  ipcMain.handle('dev:savePw', (_e, id, pw, admin) => { if (!okId(id) || !pw || String(pw).length > 200) return false; store.setDevicePw(String(id), String(pw), !!admin); return true; });
+  ipcMain.handle('dev:getPw', (_e, id) => (okId(id) ? store.getDevicePw(String(id)) : null));
+  ipcMain.handle('dev:clearPw', (_e, id) => { if (okId(id)) store.clearDevicePw(String(id)); return true; });
+  ipcMain.handle('sig:reconnect', () => { if (!sig.state.connected) sig.restart(); return true; });
   ipcMain.handle('sig:send', (_e, o) => sig.send(o));
   ipcMain.handle('sig:state', () => state());
   ipcMain.handle('sig:ice', () => sig.ice);
@@ -288,6 +312,12 @@ function registerIpc() {
     if (Notification.isSupported()) new Notification({ title: title || 'Bogestv0 REMOTE', body: body || '', silent: false }).show();
   });
   ipcMain.handle('app:notify', (_e, { title, body }) => { if (Notification.isSupported()) new Notification({ title, body, silent: false }).show(); });
+  // новое сообщение чата: если окно скрыто или не в фокусе — системное уведомление (клик открывает сессию) и мигание в панели задач
+  ipcMain.handle('app:chatNotify', (_e, { title, body }) => {
+    if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) return;
+    if (win && !win.isDestroyed() && win.isVisible()) { win.flashFrame(true); setTimeout(() => win && !win.isDestroyed() && win.flashFrame(false), 3000); }
+    if (Notification.isSupported()) { const n = new Notification({ title: String(title || 'Сообщение'), body: String(body || '').slice(0, 200), silent: false }); n.on('click', () => showWindow('session')); n.show(); }
+  });
   ipcMain.handle('app:setActive', (_e, v) => setTrayActive(v));
   ipcMain.handle('app:copy', (_e, t) => clipboard.writeText(t));
   ipcMain.handle('screen:list', () => {
@@ -325,7 +355,7 @@ function registerIpc() {
     const now = Date.now();
     for (const q of pending.queue.splice(0)) if (now - q.t < 30000) win.webContents.send(q.ch, q.payload); // старше 30 с — уже неактуально
   });
-  sig.on('state', (s) => toRenderer('sig:state', { ...s, fingerprint: store.data.server.fingerprint }));
+  sig.on('state', (s) => toRenderer('sig:state', { ...s, fingerprint: fpView() }));
   sig.on('ice', (ice) => toRenderer('sig:ice', ice));
   sig.on('message', (m) => toRenderer('sig:msg', m));
 }
@@ -343,7 +373,7 @@ app.whenReady().then(() => {
   const ses = session.defaultSession;
   // Только свои страницы (file://) и только нужные права. «fullscreen» нужен для кнопки «во весь экран»:
   // раньше обработчик запрещал всё, кроме media, из-за этого полноэкранный режим молча не включался.
-  const ALLOWED = ['media', 'fullscreen', 'pointerLock', 'keyboardLock'];
+  const ALLOWED = ['media', 'fullscreen', 'pointerLock', 'keyboardLock', 'speaker-selection'];
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(ALLOWED.includes(perm) && wc.getURL().startsWith('file://')));
   ses.setPermissionCheckHandler((wc, perm) => ALLOWED.includes(perm));
 

@@ -24,7 +24,9 @@ const PORT = 21000 + Math.floor(Math.random() * 500);
   const cfg = JSON.parse(fs.readFileSync(path.join(ud, 'config.json'), 'utf8'));
   await sleep(600);
   const saved = JSON.parse(fs.readFileSync(path.join(ud, 'config.json'), 'utf8'));
-  if (saved.server.fingerprint !== fp) throw new Error('TOFU: отпечаток не запомнен: ' + saved.server.fingerprint);
+  // в тестовом config.json адрес сервера старого формата (127.0.0.1) — приложение само переносит его в «свой сервер»
+  if (saved.customServer !== true || saved.server.host !== '46.226.166.141') throw new Error('миграция старого адреса сервера не сработала');
+  if (saved.custom.fingerprint !== fp) throw new Error('TOFU: отпечаток не запомнен: ' + saved.custom.fingerprint);
   console.log('ok: отпечаток сертификата запомнен при первом подключении (TOFU)');
   const bridgeKeys = await win.evaluate(() => Object.keys(window.bridge).join(','));
   console.log('ok: bridge =', bridgeKeys, '| нет доступа к Node из страницы:', await win.evaluate(() => typeof require === 'undefined' && typeof process === 'undefined'));
@@ -32,6 +34,13 @@ const PORT = 21000 + Math.floor(Math.random() * 500);
   console.log('screen.source ->', src ? `${src.width}x${src.height}` : 'null (в xvfb может не быть экрана)');
   const fontOk = await win.evaluate(() => document.fonts.check('700 16px Manrope') && document.fonts.check('400 14px Onest'));
   console.log('ok: локальные шрифты загружены:', fontOk);
+  // пункт 8: адрес встроенного сервера не виден ни в данных для интерфейса, ни на странице «Безопасность»
+  { const cfg2 = await win.evaluate(() => window.bridge.cfg.get()); if ('server' in cfg2 || JSON.stringify(cfg2).includes('46.226')) throw new Error('адрес встроенного сервера попал в интерфейс');
+    await win.evaluate(() => (location.hash = 'security')); await sleep(500);
+    const txt = await win.evaluate(() => document.body.innerText + [...document.querySelectorAll('input')].map((i) => i.value).join(' '));
+    if (txt.includes('46.226')) throw new Error('на странице виден адрес встроенного сервера');
+    if (!txt.includes('Использовать свой сервер')) throw new Error('нет переключателя своего сервера');
+    console.log('ok: адрес встроенного сервера скрыт (данные интерфейса и страница «Безопасность»)'); }
   // полный экран: окно Electron действительно переходит в fullscreen и выходит обратно
   await win.evaluate(() => window.bridge.win.setFullScreen(true)); await sleep(1200);
   if (!(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()))) throw new Error('окно не перешло в полный экран');
