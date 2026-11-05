@@ -246,3 +246,10 @@ table.log tr:last-child td{border-bottom:none}
 .tag.bad{background:var(--bad-soft);color:var(--bad)}
 .meter span{transition:height .08s}
 .switch.locked{opacity:.55;pointer-events:none}
+
+/* ---- обновления ---- */
+.dl-chip.upd{cursor:pointer;background:var(--accent);color:#fff;border-color:transparent}
+.dl-chip.upd:hover{filter:brightness(1.08)}
+.dl-chip.upd.busy{cursor:default;filter:none;opacity:.9}
+.upd-bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:8px}
+.upd-bar>i{display:block;height:100%;background:var(--accent);transition:width .25s}

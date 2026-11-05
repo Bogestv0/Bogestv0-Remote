@@ -9,12 +9,13 @@ const { spawn } = require('child_process');
 const { Store } = require('./store');
 const { Signaling } = require('./signaling');
 const { createInjector } = require('./input');
+const { Updater } = require('./updater');
 
 const HIDDEN = process.argv.includes('--hidden');
 const R = (f) => path.join(__dirname, 'renderer', f);
 const trayIcon = (active) => R(`tray-${active ? 'active' : 'idle'}.${process.platform === 'win32' ? 'ico' : 'png'}`); // .ico — несколько размеров для разных DPI
 let win = null, tray = null, quitting = false;
-let store, sig, injector;
+let store, sig, injector, updater;
 // Сообщения от сервера, пришедшие пока интерфейс ещё грузится (например, сразу после автозапуска), копим и отдаём по готовности.
 const pending = { ready: false, queue: [] };
 function toRenderer(ch, payload) {
@@ -285,6 +286,9 @@ function registerIpc() {
   ipcMain.on('helper:capture', (_e, on) => helperSend({ k: 'capture', on: !!on }));
   ipcMain.handle('admin:stop', () => { stopHelper(); return true; });
 
+  ipcMain.handle('updater:state', () => updater.state);
+  ipcMain.handle('updater:check', () => updater.check(true));
+  ipcMain.handle('updater:update', () => updater.update());
   ipcMain.handle('app:ready', () => {
     pending.ready = true;
     const now = Date.now();
@@ -301,6 +305,9 @@ app.whenReady().then(() => {
   if (!store.data.name) store.data.name = os.hostname();
   injector = createInjector((...a) => console.log(...a));
   sig = new Signaling(store);
+  updater = new Updater();
+  updater.on('state', (s) => toRenderer('updater:state', s));
+  updater.on('installing', () => { quitting = true; });
 
   const ses = session.defaultSession;
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc.getURL().startsWith('file://')));
@@ -311,6 +318,7 @@ app.whenReady().then(() => {
   createTray();
   applyAutostart();
   sig.start();
+  updater.start();
 });
 app.on('before-quit', () => { quitting = true; stopHelper(); if (store) store.saveNow(); });
 app.on('window-all-closed', () => { if (quitting) app.quit(); });

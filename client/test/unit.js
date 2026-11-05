@@ -13,6 +13,9 @@ assert(!fs.readFileSync(path.join(dir, 'config.json'), 'utf8').includes('secret-
 const st2 = new Store(dir, fakeSafe); assert.equal(st2.getPassword(), 'secret-pass-1'); assert.equal(st2.data.id, st.data.id);
 assert(!('token' in st2.publicView()) && !('passwordEnc' in st2.publicView())); assert.equal(st2.publicView().hasPassword, true);
 console.log('ok: store (ID постоянный, пароль зашифрован, токен не уходит в интерфейс)');
+const { cmpVer } = require('../src/semver');
+assert.equal(cmpVer('0.1.6', '0.1.5'), 1); assert.equal(cmpVer('v0.1.5', '0.1.5'), 0); assert.equal(cmpVer('0.1.9', '0.2.0'), -1); assert.equal(cmpVer('0.10.0', '0.9.9'), 1);
+console.log('ok: сравнение версий для обновлений');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const conn = (port) => new Promise((res) => { const s = net.connect(port, '127.0.0.1'); s.setEncoding('utf8'); s.on('connect', () => res(s)); s.on('error', () => res(null)); });

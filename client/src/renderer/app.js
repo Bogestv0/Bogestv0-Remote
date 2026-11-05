@@ -44,7 +44,7 @@
     cfg: null, sig: { connected: false, id: '', error: '' }, ice: [], online: new Set(),
     prompts: [], inSess: null, inTimer: null,
     out: null,            // {to, name, state, info, stats, error, admin, adminPending, control, speakers, mic}
-    streams: {}, view: 'devices',
+    streams: {}, view: 'devices', upd: null,
   };
   const hooks = {
     getIce: () => S.ice,
@@ -88,6 +88,15 @@
     $('statusText').textContent = S.sig.connected ? `В сети · ID ${fmtId(S.cfg.id)}` : 'Нет связи с сервером';
     chip.title = S.sig.connected ? 'Нажмите, чтобы скопировать ID. Окно можно закрыть — приложение продолжит работать в трее' : (S.sig.error || 'Подключаемся…');
     $('verChip').textContent = `v${S.cfg.version} · ${S.cfg.platform === 'win32' ? 'Windows' : S.cfg.platform}`;
+    const u = S.upd, uc = $('updChip');
+    const show = u && ['available', 'downloading', 'ready'].includes(u.status);
+    uc.classList.toggle('hidden', !show);
+    if (show) {
+      uc.classList.toggle('busy', u.status !== 'available');
+      uc.dataset.action = u.status === 'available' ? 'upd-update' : '';
+      uc.textContent = u.status === 'available' ? (u.canAuto ? `Обновить до v${u.latest}` : `Вышла v${u.latest}`) : u.status === 'downloading' ? `Скачиваем ${u.percent}%…` : 'Перезапуск…';
+      uc.title = u.status === 'available' ? (u.canAuto ? 'Скачать, установить и перезапустить приложение' : 'Открыть страницу загрузки') : '';
+    }
     $('accName').textContent = S.cfg.name || S.cfg.hostname;
     $('avatar').textContent = (S.cfg.name || 'Б').trim().charAt(0).toUpperCase();
     const b = $('badge'); b.textContent = S.prompts.length; b.classList.toggle('hidden', !S.prompts.length);
@@ -285,7 +294,23 @@
   }
   function setFullscreen(on) { const st = $('stage'); if (!st) return; if (on && !document.fullscreenElement) st.requestFullscreen().catch(() => {}); if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
   const OUT_STATUS = { calling: 'Соединяемся…', 'waiting-approval': 'Ждём подтверждения на устройстве…', authenticating: 'Проверяем пароль…' };
+  /** В полноэкранном режиме нельзя заменять DOM окна сессии: удалённый из страницы элемент мгновенно выходит из fullscreen.
+   *  Поэтому пока окно развёрнуто, обновляем на месте только то, что меняется (подпись, кнопки, статистика). */
+  function patchStageInPlace() {
+    const o = S.out, st = $('stage'); if (!o || !st) return;
+    const connecting = o.state !== 'active';
+    const bl = st.querySelector('.session-banner-left');
+    if (bl) bl.innerHTML = `<span class="live-dot"></span>${connecting ? esc(OUT_STATUS[o.state] || 'Соединяемся…') : `Вы управляете «${esc(o.name)}»${o.admin ? ' · доступ администратора активен' : ''}${o.adminPending ? ' · ждём подтверждения администратора…' : ''}`}`;
+    const wrap = $('stageWrap');
+    if (wrap) { wrap.classList.toggle('control', !!o.control); const ov = wrap.querySelector('.stage-overlay'); if (ov && !connecting) ov.remove(); }
+    const cls = (a, c, on) => { const b = st.querySelector(`[data-action="${a}"]`); if (b) b.classList.toggle(c, !!on); };
+    cls('t-control', 'on', o.control); cls('t-admin', 'on', o.admin);
+    cls('t-spk', 'muted', !o.speakers); cls('t-mic', 'on', o.mic); cls('t-mic', 'muted', !o.mic);
+    st.querySelectorAll('[data-action="t-clip-send"],[data-action="t-clip-get"],[data-action="t-admin"]').forEach((b) => { b.disabled = connecting; });
+    updateStatsOnly();
+  }
   function renderSession() {
+    if (S.out && document.fullscreenElement && document.fullscreenElement.id === 'stage' && $('stage')) return patchStageInPlace();
     const parts = [];
     const o = S.out, s = S.inSess;
     if (!o && !(s && s.state === 'active')) {
@@ -405,6 +430,26 @@
     const T = { password: ['ok', 'без подтверждения'], ask: ['ok', 'запрос подтверждён'], admin: ['ok', 'админ подтверждён'], ended: ['ok', 'завершено'], denied: ['warn', 'отклонено'], 'bad-password': ['bad', 'неверный пароль'], 'admin-denied': ['warn', 'админ отклонён'], 'admin-failed': ['warn', 'админ не выдан'], clip: ['warn', 'буфер обмена'] }[e.kind] || ['ok', e.kind];
     return `<tr><td>${esc(e.who || '—')}</td><td class="mono">ID ${fmtId(e.id)}</td><td><span class="tag ${T[0]}">${esc(T[1])}</span></td><td class="mono">${AGO.format(new Date(e.ts))}</td></tr>`;
   }
+  /** Панель «Обновления»: обновляется на месте, без перерисовки всей страницы (иначе во время скачивания сбрасывался бы журнал диагностики). */
+  function updPanelHtml() {
+    const u = S.upd || { status: 'idle', canAuto: false }; const cur = S.cfg.version;
+    const busy = ['checking', 'downloading', 'ready'].includes(u.status);
+    let line = `Установлена версия ${esc(cur)}`;
+    if (u.status === 'checking') line = 'Проверяем наличие обновлений…';
+    else if (u.status === 'available') line = `Доступна версия <b>${esc(u.latest)}</b> (у вас ${esc(cur)})`;
+    else if (u.status === 'downloading') line = `Скачиваем обновление: ${u.percent}%`;
+    else if (u.status === 'ready') line = 'Обновление скачано — устанавливаем и перезапускаем приложение…';
+    else if (u.status === 'none') line = `У вас последняя версия (${esc(cur)})`;
+    else if (u.status === 'error') line = `Не удалось проверить обновления: ${esc(u.error || 'нет связи')}`;
+    const bar = u.status === 'downloading' ? `<div class="upd-bar"><i style="width:${u.percent}%"></i></div>` : '';
+    const btn = u.status === 'available'
+      ? `<button class="btn btn-primary btn-sm" data-action="upd-update">${u.canAuto ? 'Обновить сейчас' : 'Скачать новую версию'}</button>`
+      : `<button class="btn btn-ghost btn-sm" data-action="upd-check" ${busy ? 'disabled' : ''}>Проверить обновления</button>`;
+    const notes = u.status === 'available' && u.notes ? `<div class="setting-help" style="white-space:pre-wrap;max-height:120px;overflow:auto">${esc(u.notes)}</div>` : '';
+    const hint = u.canAuto ? 'Приложение само проверяет обновления раз в 6 часов. Скачивание и установка — только после вашего нажатия; приложение перезапустится, идущий сеанс будет завершён. Windows может показать запрос UAC.' : 'Эта версия (портативная или запущена не из установщика) не умеет обновляться сама: при выходе новой версии кнопка откроет страницу загрузки.';
+    return `<div class="panel-head" style="margin-bottom:2px"><h2>Обновления</h2><span class="tag ${u.status === 'available' ? 'warn' : u.status === 'error' ? 'bad' : 'ok'}">v${esc(cur)}</span></div>
+      <div class="setting-row"><div><div class="setting-label">${line}</div><div class="setting-help">${hint}</div>${bar}${notes}</div>${btn}</div>`;
+  }
   function renderSecurity() {
     const c = S.cfg; const sv = c.server;
     $('view-security').innerHTML = `
@@ -427,6 +472,7 @@
         <div class="setting-row"><div><div class="setting-label">Значок в трее показывает статус</div><div class="setting-help">Серый — просто в сети, цветной — идёт подключение. Через значок доступны «Открыть окно» и «Выйти полностью».</div></div>${switchHtml(true, '', true)}</div>
         <div class="edgebar" style="margin-top:10px">${ICON.info}Работа в фоне не отключает уведомления о подключениях: баннер показывается, даже если окно свёрнуто в трей.</div>
       </div>
+      <div class="panel" id="updPanel" style="display:flex;flex-direction:column;gap:10px">${updPanelHtml()}</div>
       <div class="panel" style="display:flex;flex-direction:column;gap:12px">
         <div class="panel-head"><h2>Сервер</h2><span class="tag ${S.sig.connected ? 'ok' : 'bad'}">${S.sig.connected ? 'подключён' : 'нет связи'}</span></div>
         ${S.sig.error && !S.sig.connected ? `<div class="edgebar" style="background:var(--bad-soft);border-left-color:var(--bad)">${ICON.info}${esc(S.sig.error)}</div>` : ''}
@@ -512,6 +558,11 @@
       case 'sec-autostart': await B.cfg.set({ autostart: !S.cfg.autostart }); await refreshCfg(); return renderAll();
       case 'sec-tray': await B.cfg.set({ minimizeToTray: !S.cfg.minimizeToTray }); await refreshCfg(); return renderAll();
       case 'sec-relay': await B.cfg.set({ relayOnly: !(S.cfg.relayOnly === true) }); await refreshCfg(); return renderAll();
+      case 'upd-check': return B.updater.check();
+      case 'upd-update': {
+        if ((S.out || S.inSess) && !confirm('Сейчас идёт сеанс. Обновление перезапустит приложение и завершит его. Продолжить?')) return;
+        return B.updater.update();
+      }
       case 'diag-copy': B.app.copy(diagText()); return toast('Журнал скопирован — вставьте его в чат');
       case 'diag-clear': window.__evlog = []; return renderSecurity();
       case 'sec-password': return passwordDialog();
@@ -547,6 +598,8 @@
   (async function init() {
     await refreshCfg(); S.ice = await B.sig.ice();
     B.sig.onIce((ice) => { S.ice = ice; });
+    try { S.upd = await B.updater.state(); } catch { S.upd = null; }
+    B.updater.onState((u) => { S.upd = u; renderTop(); const pnl = $('updPanel'); if (pnl && S.view === 'security') pnl.innerHTML = updPanelHtml(); });
     B.sig.onState((st) => { const was = S.sig.connected; S.sig = st; if (!was && st.connected) { pollPresence(); sess.flushOutbox(); } if (!st.connected) S.online = new Set(); renderAll(); });
     B.sig.onMsg((m) => {
       if (m.t === 'presence') { S.online = new Set(m.online); if (S.view === 'devices') renderDevices(); return; }

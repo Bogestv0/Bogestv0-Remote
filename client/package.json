@@ -1,7 +1,7 @@
 {
   "name": "bogestv0-remote",
   "productName": "Bogestv0 REMOTE",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "Bogestv0 REMOTE — удалённый доступ к компьютеру",
   "main": "src/main.js",
   "author": "Bogestv0",
@@ -9,13 +9,14 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node test/unit.js && node test/service.js",
+    "test": "node test/unit.js && node test/service.js && node test/updater.js",
     "dist": "electron-builder --win portable nsis --x64 --publish never"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.1.0",
     "@fontsource/manrope": "^5.1.0",
     "@fontsource/onest": "^5.1.0",
+    "electron-updater": "^6.8.11",
     "koffi": "^2.9.0",
     "ws": "^8.18.0"
   },
@@ -70,6 +71,14 @@
           "Bogestv0Service.xml",
           "Bogestv0Service.exe"
         ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Bogestv0",
+        "repo": "Bogestv0-Remote",
+        "releaseType": "release"
       }
     ]
   }

@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('bridge', {
     onState: (cb) => on('sig:state', cb),
     onIce: (cb) => on('sig:ice', cb),
   },
+  updater: {
+    state: () => ipcRenderer.invoke('updater:state'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    update: () => ipcRenderer.invoke('updater:update'),
+    onState: (cb) => on('updater:state', cb),
+  },
   log: { add: (e) => ipcRenderer.invoke('log:add', e) },
   app: {
     attention: (title, body) => ipcRenderer.invoke('app:attention', { title, body }),
