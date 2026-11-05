@@ -22,10 +22,10 @@ const INIT = `(() => {
     sig: { send: (o) => call('sig.send', o), state: () => call('sig.state'), ice: () => call('sig.ice'), onMsg: (cb) => on('sig:msg', cb), onState: (cb) => on('sig:state', cb), onIce: (cb) => on('sig:ice', cb) },
     updater: { state: () => call('updater.state'), check: () => call('updater.check'), update: () => call('updater.update'), onState: (cb) => on('updater:state', cb) },
     log: { add: (e) => call('log.add', e) },
-    app: { readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), onNavigate: (cb) => on('nav', cb) },
+    app: { readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), onNavigate: (cb) => on('nav', cb), onKick: (cb) => on('app:kick', cb) },
     screen: { source: (id) => call('screen.source', id), list: () => call('screen.list') },
     input: { send: (ev) => { call('input.send', ev); }, release: () => { call('input.release'); } },
-    win: { setFullScreen: (on) => call('win.fs', on), onFullscreen: (cb) => on('win:fs-state', cb) },
+    win: { hide: () => call('win.hide'), setFullScreen: (on) => call('win.fs', on), onFullscreen: (cb) => on('win:fs-state', cb) },
     admin: { start: (m) => call('admin.start', m), stop: () => call('admin.stop'), onDesktop: (cb) => on('helper:desktop', cb), onFrame: (cb) => on('helper:frame', cb), capture: () => {} },
   };
   // синтетический экран (canvas, анимация) + звук (осциллятор)
@@ -90,6 +90,7 @@ class Peer {
       case 'admin.start': this.adminStarts++; this.adminMeta = a[0]; return this.adminResult;
       case 'admin.stop': return true;
       case 'updater.state': return { status: 'idle', canAuto: false };
+      case 'win.hide': this.hides = (this.hides || 0) + 1; return;
       case 'win.fs': this.fsCalls = [...(this.fsCalls || []), !!a[0]]; return;
       default: return;
     }
@@ -151,6 +152,8 @@ const outEnded = async (v, reason) => { let last = '';
   assert.equal(await H.S("S.inSess && S.inSess.mode"), 'password');
   assert(H.notifies.some((n) => n[1].includes('MacBook')), 'host обязан показать уведомление и при входе по паролю');
   ok('хост показал уведомление о подключении (даже без подтверждения)');
+  await until(() => (H.hides || 0) >= 1, 4000, 'окно хоста спрятано в трей');
+  ok('пункт 5: при подключении окно программы на хосте само уходит в трей');
   const audioFlowing = await until(() => V.page.evaluate(() => { const a = document.getElementById('aSpk'); return a.srcObject && a.srcObject.getAudioTracks().length === 1; }), 8000, 'аудио-трек');
   ok('аудио-трек динамиков получен');
   assert((await V.S("S.out.info.mics.length")) === 1); ok('список микрофонов хоста передан');
@@ -195,6 +198,19 @@ const outEnded = async (v, reason) => { let last = '';
   await until(() => V.fsCalls.at(-1) === false, 3000, 'выход по Esc');
   await V.page.click('[data-action=t-control]');
   ok('кнопка «во весь экран»: входит, остаётся при перерисовках, выходит кнопкой и по Esc (при управлении Esc уходит на удалённый ПК)');
+
+  // пункт 6: свой курсор над удалённым экраном виден по умолчанию, кнопка скрывает/показывает
+  const cur = () => V.page.evaluate(() => getComputedStyle(document.querySelector('#stageWrap video')).cursor);
+  assert.equal(await cur(), 'default');
+  await V.page.click('[data-action=t-cursor]'); assert.equal(await cur(), 'none');
+  assert.equal(await V.page.evaluate(() => localStorage.getItem('bg.localCursor')), '0');   // выбор запоминается
+  await V.page.click('[data-action=t-cursor]'); assert.equal(await cur(), 'default');
+  ok('пункт 6: курсор над экраном виден по умолчанию, кнопка скрывает/показывает его, выбор запоминается');
+  // быстрый поток движений мыши: последнее положение обязательно доходит до хоста
+  { const bx = await V.page.locator('#stageWrap video').boundingBox(); const n0 = H.inputs.length;
+    for (let i = 0; i <= 40; i++) await V.page.mouse.move(bx.x + 100 + i * 5, bx.y + 100 + i * 2);
+    await until(() => { const m = H.inputs.filter((e) => e.k === 'mm'); const l = m[m.length - 1]; return l && H.inputs.length - n0 >= 3 && Math.abs(l.y - ((bx.y + 180 - (bx.y + (bx.height - Math.min(bx.width / 640, bx.height / 360) * 360) / 2)) / (Math.min(bx.width / 640, bx.height / 360) * 360))) < 0.02; }, 4000, 'последнее положение мыши дошло до хоста');
+    ok('быстрое движение мыши: отправлено ' + (H.inputs.length - n0) + ' событий, последнее положение дошло'); }
 
   // микрофон
   await V.page.click('[data-action=t-mic]');
@@ -303,7 +319,9 @@ const outEnded = async (v, reason) => { let last = '';
   assert.equal(H.adminStarts, as0 + 1); assert.equal(H.adminMeta.silent, true, 'в main должен уйти признак silent');
   assert(H.cfg.log.some((e) => e.note && e.note.includes('автоматически')));
   ok('вход по паролю при включённой галочке: права администратора выданы сразу, без запроса, в журнале пометка');
-  await V.page.evaluate(() => window.__sess.hangup()); await until(async () => !(await H.S('!!S.inSess')), 8000, 'closed');
+  await H.page.evaluate(() => window.__emit('app:kick', true));   // «Отключить текущее подключение» из меню трея
+  await until(async () => !(await H.S('!!S.inSess')), 8000, 'сессия отключена из трея');
+  ok('меню трея: «Отключить текущее подключение» завершает сессию');
   // вход «с подтверждением» (не по паролю) по-прежнему просит отдельно, даже при включённой галочке
   await sleep(500);
   await uiConnect(V, H, { mode: 'ask', admin: true });

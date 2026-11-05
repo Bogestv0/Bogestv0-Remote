@@ -14,7 +14,7 @@ const { Updater } = require('./updater');
 const HIDDEN = process.argv.includes('--hidden');
 const R = (f) => path.join(__dirname, 'renderer', f);
 const trayIcon = (active) => R(`tray-${active ? 'active' : 'idle'}.${process.platform === 'win32' ? 'ico' : 'png'}`); // .ico — несколько размеров для разных DPI
-let win = null, tray = null, quitting = false;
+let win = null, tray = null, quitting = false, sessionActive = false;
 let store, sig, injector, updater;
 // Сообщения от сервера, пришедшие пока интерфейс ещё грузится (например, сразу после автозапуска), копим и отдаём по готовности.
 const pending = { ready: false, queue: [] };
@@ -61,7 +61,8 @@ function createWindow() {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.on('close', (e) => {
-    if (!quitting && store.data.minimizeToTray) { e.preventDefault(); win.hide(); }
+    // Во время подключения крестик всегда прячет окно в трей: иначе приложение завершилось бы и оборвало сессию
+    if (!quitting && (store.data.minimizeToTray || sessionActive)) { e.preventDefault(); win.hide(); }
   });
 }
 function showWindow(view) {
@@ -70,18 +71,24 @@ function showWindow(view) {
   win.show(); win.focus();
   if (view) win.webContents.send('nav', view);
 }
+function trayMenu() {
+  return Menu.buildFromTemplate([
+    { label: 'Открыть окно', click: () => showWindow() },
+    { label: 'Отключить текущее подключение', enabled: sessionActive, click: () => toRenderer('app:kick', true) },
+    { type: 'separator' },
+    { label: 'Выйти полностью', click: () => { quitting = true; app.quit(); } },
+  ]);
+}
 function createTray() {
   tray = new Tray(nativeImage.createFromPath(trayIcon(false)));
   tray.setToolTip('Bogestv0 REMOTE — в сети');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Открыть окно', click: () => showWindow() },
-    { type: 'separator' },
-    { label: 'Выйти полностью', click: () => { quitting = true; app.quit(); } },
-  ]));
+  tray.setContextMenu(trayMenu());
   tray.on('double-click', () => showWindow());
 }
 function setTrayActive(active) {
+  sessionActive = !!active;
   if (!tray) return;
+  tray.setContextMenu(trayMenu());
   tray.setImage(nativeImage.createFromPath(trayIcon(active)));
   tray.setToolTip(active ? 'Bogestv0 REMOTE — идёт подключение' : 'Bogestv0 REMOTE — в сети');
 }
@@ -232,7 +239,7 @@ function registerIpc() {
     injector: injector.available, sig: state(),
   }));
   ipcMain.handle('cfg:set', async (_e, patch) => {
-    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'relayOnly', 'devices', 'server', 'name', 'passwordAdmin'];
+    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'relayOnly', 'devices', 'server', 'name', 'passwordAdmin', 'hideOnConnect'];
     let restart = false; let warn = '';
     for (const k of Object.keys(patch || {})) {
       if (!allowed.includes(k)) continue;
@@ -303,6 +310,7 @@ function registerIpc() {
   ipcMain.handle('app:readClipboard', () => clipboard.readText().slice(0, 200000));
   ipcMain.on('input:ev', (_e, ev) => { try { inject(ev); } catch (err) { console.error('inject', err); } });
   ipcMain.on('input:release', () => { selectedDisplay = null; try { injector.releaseAll(); helperSend({ k: 'release' }); } catch {} });
+  ipcMain.on('win:hide', () => { if (win && !win.isDestroyed()) { win.setFullScreen(false); win.hide(); } });
   ipcMain.on('win:fs', (_e, on) => { if (win && !win.isDestroyed()) win.setFullScreen(!!on); });
   ipcMain.handle('admin:start', (_e, meta) => startHelper(meta));
   ipcMain.handle('service:status', () => serviceStatus());

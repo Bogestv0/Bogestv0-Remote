@@ -13,6 +13,7 @@ const DEFAULTS = {
   passwordAdmin: false,      // вход по паролю сразу даёт права администратора (без отдельного запроса)
   autostart: true,
   minimizeToTray: true,
+  hideOnConnect: true,       // когда к этому компьютеру подключились — убрать окно программы в трей (не мешает на удалённом экране)
   relayOnly: true,           // соединять только через TURN-сервер (устойчиво к разным NAT); можно выключить в «Безопасность»
   server: { host: '46.226.166.141', port: 8443, fingerprint: '' },
   devices: [],               // [{id, name}]

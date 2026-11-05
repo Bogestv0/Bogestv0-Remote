@@ -228,7 +228,8 @@ table.log tr:last-child td{border-bottom:none}
 /* удалённый экран */
 .stage-wrap{position:relative;background:#000;display:flex;align-items:center;justify-content:center;min-height:300px;aspect-ratio:16/9;max-height:68vh}
 .stage-wrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;outline:none;cursor:default}
-.stage-wrap.control video{cursor:none}
+.stage-wrap.control video{cursor:default}
+.stage-wrap.control.nocursor video{cursor:none}
 .stage-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:rgba(255,255,255,.75);font:500 13px 'IBM Plex Mono',monospace;text-align:center;padding:24px;background:rgba(16,16,25,.72)}
 .spinner{width:22px;height:22px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}

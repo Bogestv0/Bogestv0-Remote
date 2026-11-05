@@ -20,6 +20,7 @@
     full: I('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
     x: I('<path d="M5 5l14 14M19 5L5 19"/>'),
     clipUp: I('<path d="M12 21V9M7 14l5-5 5 5M5 3h14"/>'),
+    cursor: I('<path d="M5 3l14 7-6 2-2 6L5 3z"/>'),
     clipDown: I('<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>'),
   };
   const REASONS = {
@@ -45,6 +46,7 @@
     prompts: [], inSess: null, inTimer: null,
     out: null,            // {to, name, state, info, stats, error, admin, adminPending, control, speakers, mic}
     streams: {}, view: 'devices', upd: null,
+    localCursor: (() => { try { return localStorage.getItem('bg.localCursor') !== '0'; } catch { return true; } })(),   // показывать свой курсор над удалённым экраном
   };
   const hooks = {
     getIce: () => S.ice,
@@ -255,6 +257,8 @@
         B.app.notify('Bogestv0 REMOTE', `Вас подключил ${ev.sess.name} (ID ${fmtId(ev.sess.from)})`);
         clearInterval(S.inTimer); S.inTimer = setInterval(() => { if (S.view === 'session' && !S.out) renderSession(); }, 1000);
         location.hash = 'session';
+        // к этому компьютеру подключились — убираем окно программы в трей, чтобы оно не закрывало удалённый экран
+        if (S.cfg.hideOnConnect !== false && !S.out) setTimeout(() => { if (S.inSess && S.inSess.state === 'active' && !S.out) B.win.hide(); }, 600);
       }
     }
     renderAll();
@@ -285,7 +289,7 @@
 
   // ------------------------------------------------------------------ Сессия
   const video = document.createElement('video');
-  video.autoplay = true; video.playsInline = true; video.muted = true; video.tabIndex = 0;
+  video.autoplay = true; video.playsInline = true; video.muted = true; video.tabIndex = 0; video.disableRemotePlayback = true;
   function attachStreams() {
     if (video.srcObject !== (S.streams.video || null)) video.srcObject = S.streams.video || null;
     const sp = $('aSpk'), mc = $('aMic');
@@ -321,9 +325,10 @@
       <div class="session-stage" id="stage">
         <div class="session-banner"><div class="session-banner-left"><span class="live-dot"></span>${connecting ? esc(OUT_STATUS[o.state] || 'Соединяемся…') : `Вы управляете «${esc(o.name)}»${o.admin ? ' · доступ администратора активен' : ''}${o.adminPending ? ' · ждём подтверждения администратора…' : ''}`}</div>
           <button class="btn btn-danger btn-sm" data-action="hangup">Отключить сейчас</button></div>
-        <div class="stage-wrap ${o.control ? 'control' : ''}" id="stageWrap">${connecting ? `<div class="stage-overlay"><div class="spinner"></div>${esc(OUT_STATUS[o.state] || 'Соединяемся…')}</div>` : ''}</div>
+        <div class="stage-wrap ${o.control ? 'control' : ''} ${S.localCursor ? '' : 'nocursor'}" id="stageWrap">${connecting ? `<div class="stage-overlay"><div class="spinner"></div>${esc(OUT_STATUS[o.state] || 'Соединяемся…')}</div>` : ''}</div>
         <div class="toolbar">
           <button class="tool-btn ${o.control ? 'on' : ''}" data-action="t-control" title="${o.control ? 'Управление включено' : 'Только просмотр'}">${ICON.ptr}</button>
+          <button class="tool-btn ${S.localCursor ? 'on' : ''}" data-action="t-cursor" title="${S.localCursor ? 'Ваш курсор над удалённым экраном: виден (нажмите, чтобы скрыть)' : 'Ваш курсор над удалённым экраном: скрыт (нажмите, чтобы показать)'}">${ICON.cursor}</button>
           <button class="tool-btn ${S.fs ? 'on' : ''}" data-action="t-full" title="${S.fs ? 'Выйти из полноэкранного режима' : 'Во весь экран'}">${ICON.full}</button>
           ${(o.info && o.info.monitors && o.info.monitors.length > 1) ? `<select class="select" id="monSel" style="height:34px;border-radius:9px;background:rgba(255,255,255,.08);color:#fff;border:0;max-width:210px" title="Какой монитор показывать">${o.info.monitors.map((m) => `<option value="${esc(m.id)}" ${m.id === o.info.monitor ? 'selected' : ''} style="color:#000">${esc(m.label)}</option>`).join('')}</select>` : ''}
           <button class="tool-btn" data-action="t-clip-send" title="Отправить текст из вашего буфера обмена на удалённое устройство" ${connecting ? 'disabled' : ''}>${ICON.clipUp}</button>
@@ -341,7 +346,7 @@
       const mins = Math.floor((Date.now() - s.startedAt) / 1000); const t = [Math.floor(mins / 3600), Math.floor(mins / 60) % 60, mins % 60].map((x) => String(x).padStart(2, '0')).join(':');
       parts.push(`${o ? '' : `<div><h1 class="page-title">Активная сессия</h1><div class="page-desc">К вам подключились · идёт ${t}</div></div>`}
       <div class="panel host-session"><div class="banner ${s.perms.admin ? 'admin' : ''}"><div class="session-banner-left" style="color:var(--fg)"><span class="live-dot"></span><b>Вас подключил ${esc(s.name)}</b>${s.perms.admin ? ' · доступ администратора активен' : ''}</div>
-        <button class="btn btn-danger btn-sm" data-action="kick">Отключить сейчас</button></div>
+        <div class="row-actions"><button class="btn btn-ghost btn-sm" data-action="hide-window" title="Свернуть окно в трей; подключение продолжится">Скрыть окно</button><button class="btn btn-danger btn-sm" data-action="kick">Отключить сейчас</button></div></div>
         <div class="kv"><span>ID ${fmtId(s.from)}</span><span>${s.mode === 'password' ? 'вход по паролю' : 'по подтверждению'}</span><span>идёт ${t}</span><span>экран · мышь и клавиатура</span></div></div>`);
     }
     $('view-session').innerHTML = parts.join('');
@@ -360,12 +365,15 @@
     const x = (e.clientX - (r.left + (r.width - w) / 2)) / w, y = (e.clientY - (r.top + (r.height - h) / 2)) / h;
     return x < 0 || y < 0 || x > 1 || y > 1 ? null : { x, y };
   }
-  const held = new Set(); let moveQueued = null;
+  const held = new Set(); let moveQueued = null, moveLast = 0, moveTimer = 0;
   const ctl = () => S.out && S.out.state === 'active' && S.out.control;
+  // Движение мыши уходит сразу (раньше ждали следующий кадр отрисовки — до 16 мс задержки), но не чаще раза в 8 мс; последнее положение не теряется.
+  const flushMove = () => { moveTimer = 0; const q = moveQueued; moveQueued = null; if (q) { moveLast = performance.now(); sess.sendInput({ k: 'mm', ...q }); } };
   video.addEventListener('mousemove', (e) => {
     if (!ctl()) return; const p = norm(e); if (!p) return;
-    if (!moveQueued) requestAnimationFrame(() => { const q = moveQueued; moveQueued = null; if (q) sess.sendInput({ k: 'mm', ...q }); });
     moveQueued = p;
+    const wait = 8 - (performance.now() - moveLast);
+    if (wait <= 0) { clearTimeout(moveTimer); flushMove(); } else if (!moveTimer) moveTimer = setTimeout(flushMove, wait);
   });
   video.addEventListener('mousedown', (e) => { video.focus(); if (!ctl()) return; const p = norm(e); if (p) { e.preventDefault(); sess.sendInput({ k: 'md', b: e.button, ...p }); } });
   video.addEventListener('mouseup', (e) => { if (!ctl()) return; const p = norm(e) || { x: 0.5, y: 0.5 }; e.preventDefault(); sess.sendInput({ k: 'mu', b: e.button, ...p }); });
@@ -466,6 +474,7 @@
         <div class="setting-row"><div><div class="setting-label">Служба расширенного доступа</div><div class="setting-help">${S.svc ? 'Установлена: управление окнами UAC и экраном входа возможно, каждый раз после вашего подтверждения системным окном.' : 'Не установлена (обычная версия или портативная). Права администратора запрашиваются через UAC; экран входа и окно UAC удалённо не видны. Служба ставится установщиком Setup.'}</div></div><span style="font-family:var(--mono,monospace);font-size:12px;opacity:.8">${S.svc ? 'работает' : 'нет'}</span></div>
         <div class="setting-row"><div><div class="setting-label">Запускать вместе с Windows</div><div class="setting-help">Добавляет приложение в автозагрузку текущего пользователя. Прав администратора не требует.</div></div>${switchHtml(c.autostart, 'sec-autostart')}</div>
         <div class="setting-row"><div><div class="setting-label">Сворачивать в трей вместо закрытия</div><div class="setting-help">Крестик на окне не завершает приложение — оно остаётся работать в фоне со значком в системном трее. Двойной клик по значку открывает окно.</div></div>${switchHtml(c.minimizeToTray, 'sec-tray')}</div>
+        <div class="setting-row"><div><div class="setting-label">Прятать окно, когда к компьютеру подключились</div><div class="setting-help">Как только кто-то подключился к этому компьютеру, окно программы уходит в трей и не закрывает ему экран. Подключение продолжается; отключить его можно из меню значка в трее. Уведомление о входе показывается всё равно.</div></div>${switchHtml(c.hideOnConnect !== false, 'sec-hide')}</div>
         <div class="setting-row"><div><div class="setting-label">Значок в трее показывает статус</div><div class="setting-help">Серый — просто в сети, цветной — идёт подключение. Через значок доступны «Открыть окно» и «Выйти полностью».</div></div>${switchHtml(true, '', true)}</div>
         <div class="edgebar" style="margin-top:10px">${ICON.info}Работа в фоне не отключает уведомления о подключениях: баннер показывается, даже если окно свёрнуто в трей.</div>
       </div>
@@ -552,7 +561,15 @@
       case 'deny': return S.prompts[0] && finishPrompt(S.prompts[0], false);
       case 'hangup': return sess.hangup();
       case 'kick': return sess.kickIn();
+      case 'hide-window': return B.win.hide();
       case 't-control': S.out.control = !S.out.control; return renderAll();
+      case 't-cursor': {
+        S.localCursor = !S.localCursor; try { localStorage.setItem('bg.localCursor', S.localCursor ? '1' : '0'); } catch {}
+        const w = $('stageWrap'); if (w) w.classList.toggle('nocursor', !S.localCursor);
+        el.classList.toggle('on', S.localCursor);
+        el.title = S.localCursor ? 'Ваш курсор над удалённым экраном: виден (нажмите, чтобы скрыть)' : 'Ваш курсор над удалённым экраном: скрыт (нажмите, чтобы показать)';
+        return;
+      }
       case 't-full': return setFullscreen(!S.fs);
       case 't-clip-send': return sess.clipSend();
       case 't-clip-get': return sess.clipGet();
@@ -563,6 +580,7 @@
       case 'sec-pwadmin': { toast(S.cfg.passwordAdmin ? 'Выключаем…' : 'Подтвердите включение в системном окне на этом компьютере…'); const r = await B.cfg.set({ passwordAdmin: !S.cfg.passwordAdmin }); if (!r.ok) toast(r.error, true); else if (r.warn) toast(r.warn); await refreshCfg(); return renderAll(); }
       case 'sec-autostart': await B.cfg.set({ autostart: !S.cfg.autostart }); await refreshCfg(); return renderAll();
       case 'sec-tray': await B.cfg.set({ minimizeToTray: !S.cfg.minimizeToTray }); await refreshCfg(); return renderAll();
+      case 'sec-hide': await B.cfg.set({ hideOnConnect: !(S.cfg.hideOnConnect !== false) }); await refreshCfg(); return renderAll();
       case 'sec-relay': await B.cfg.set({ relayOnly: !(S.cfg.relayOnly === true) }); await refreshCfg(); return renderAll();
       case 'upd-check': return B.updater.check();
       case 'upd-update': {
@@ -614,6 +632,7 @@
       sess.onServerMessage(m);
     });
     B.app.onNavigate((v) => { location.hash = v; });
+    B.app.onKick(() => sess.kickIn());
     setInterval(pollPresence, 10000);
     setInterval(() => { const b = $('diagBox'); if (b && S.view === 'security') { const t = diagText(); if (b.value !== t) { b.value = t; b.scrollTop = b.scrollHeight; } } }, 2000);
     show((location.hash || '#devices').slice(1));

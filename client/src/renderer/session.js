@@ -49,7 +49,7 @@
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: { mandatory: base }, video }); }
     catch { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video }); }
     const v = stream.getVideoTracks()[0];
-    try { v.contentHint = 'detail'; } catch {}
+    try { v.contentHint = 'motion'; } catch {}   // 'motion' = плавность (раньше 'detail' — резкость текста, но ниже частота кадров)
     return { video: v, audio: stream.getAudioTracks()[0] || null, width: src.width, height: src.height, displayId: src.displayId };
   }
   async function defaultMic(deviceId) {
@@ -283,7 +283,7 @@
         await s.vSender.replaceTrack(cap.video);
         try {
           const p = s.vSender.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}];
-          p.encodings[0].maxBitrate = 20e6; p.encodings[0].maxFramerate = 60; p.degradationPreference = 'maintain-resolution';
+          p.encodings[0].maxBitrate = 20e6; p.encodings[0].maxFramerate = 60; p.degradationPreference = 'balanced'; p.encodings[0].networkPriority = 'high'; p.encodings[0].priority = 'high';
           await s.vSender.setParameters(p);
         } catch {}
         if (cap.audio) { s.spkOn = true; await s.sSender.replaceTrack(cap.audio); }
@@ -442,6 +442,8 @@
         pc.ontrack = (e) => {
           const ms = new MediaStream([e.track]);
           const i = s.tx.indexOf(e.transceiver);
+          // минимальная буферизация видео на стороне зрителя: меньше задержка между движением мыши и картинкой
+          if (i === 0 && e.receiver) { try { e.receiver.jitterBufferTarget = 0; } catch {} try { e.receiver.playoutDelayHint = 0; } catch {} }
           emit('track', { which: i === 0 ? 'video' : i === 1 ? 'speakers' : 'mic', stream: ms });
         };
         pc.onicecandidate = (e) => { if (e.candidate) this.outIce(s, id, e.candidate); };
