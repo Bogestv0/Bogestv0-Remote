@@ -227,14 +227,11 @@ table.log tr:last-child td{border-bottom:none}
 
 /* удалённый экран */
 .stage-wrap{position:relative;background:#000;display:flex;align-items:center;justify-content:center;min-height:300px;aspect-ratio:16/9;max-height:68vh}
-.stage-wrap video{width:100%;height:100%;object-fit:contain;background:#000;outline:none;cursor:default}
+.stage-wrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;outline:none;cursor:default}
 .stage-wrap.control video{cursor:none}
 .stage-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:rgba(255,255,255,.75);font:500 13px 'IBM Plex Mono',monospace;text-align:center;padding:24px;background:rgba(16,16,25,.72)}
 .spinner{width:22px;height:22px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-.session-stage:fullscreen{border-radius:0;border:0}
-.session-stage:fullscreen .stage-wrap{max-height:none;aspect-ratio:auto;flex:1}
-.session-stage:fullscreen{height:100vh}
 .tool-btn{cursor:pointer;border:0}
 .tool-btn.on{background:var(--accent);color:var(--accent-ink)}
 .host-session{display:flex;flex-direction:column;gap:12px}
@@ -253,3 +250,21 @@ table.log tr:last-child td{border-bottom:none}
 .dl-chip.upd.busy{cursor:default;filter:none;opacity:.9}
 .upd-bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:8px}
 .upd-bar>i{display:block;height:100%;background:var(--accent);transition:width .25s}
+
+/* ================= большой экран сессии ================= */
+/* Во время своей сессии страница занимает всё окно: заголовок — тонкой строкой, экран тянется на всю свободную высоту и ширину. */
+.sess-head{display:flex;align-items:baseline;gap:14px;flex:none}
+.sess-head .page-title{font-size:18px}
+.sess-head .page-desc{margin:0}
+body.sess{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+body.sess .topbar{position:relative;top:auto;flex:none;padding-top:8px;padding-bottom:8px}
+body.sess .wrap{max-width:none;width:100%;flex:1 1 0;min-height:0;margin:0;padding:10px 14px 12px;gap:8px}
+body.sess .view.active#view-session{flex:1 1 0;min-height:0;gap:8px}
+body.sess .session-stage{flex:1 1 0;min-height:0}
+body.sess .stage-wrap{flex:1 1 0;min-height:200px;aspect-ratio:auto;max-height:none}
+body.sess .host-session{flex:none}
+
+/* Полный экран: окно сессии поверх всего, панель управления остаётся внизу */
+body.stage-full .topbar{display:none}
+body.stage-full .session-stage{position:fixed;inset:0;z-index:40;border-radius:0;border:0;height:100vh}
+body.stage-full .stage-wrap{flex:1 1 0;min-height:0;aspect-ratio:auto;max-height:none}

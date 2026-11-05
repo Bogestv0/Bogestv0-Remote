@@ -20,11 +20,13 @@ const INIT = `(() => {
   window.bridge = {
     cfg: { get: () => call('cfg.get'), set: (p) => call('cfg.set', p), setPassword: (p) => call('cfg.setPassword', p), getSecret: () => call('cfg.getSecret') },
     sig: { send: (o) => call('sig.send', o), state: () => call('sig.state'), ice: () => call('sig.ice'), onMsg: (cb) => on('sig:msg', cb), onState: (cb) => on('sig:state', cb), onIce: (cb) => on('sig:ice', cb) },
+    updater: { state: () => call('updater.state'), check: () => call('updater.check'), update: () => call('updater.update'), onState: (cb) => on('updater:state', cb) },
     log: { add: (e) => call('log.add', e) },
     app: { readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), onNavigate: (cb) => on('nav', cb) },
     screen: { source: (id) => call('screen.source', id), list: () => call('screen.list') },
     input: { send: (ev) => { call('input.send', ev); }, release: () => { call('input.release'); } },
-    admin: { start: () => call('admin.start'), stop: () => call('admin.stop'), onDesktop: (cb) => on('helper:desktop', cb), onFrame: (cb) => on('helper:frame', cb), capture: () => {} },
+    win: { setFullScreen: (on) => call('win.fs', on), onFullscreen: (cb) => on('win:fs-state', cb) },
+    admin: { start: (m) => call('admin.start', m), stop: () => call('admin.stop'), onDesktop: (cb) => on('helper:desktop', cb), onFrame: (cb) => on('helper:frame', cb), capture: () => {} },
   };
   // синтетический экран (canvas, анимация) + звук (осциллятор)
   const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
@@ -85,8 +87,10 @@ class Peer {
       case 'app.notify': this.notifies.push(a); return;
       case 'input.send': this.inputs.push(a[0]); return;
       case 'input.release': this.releases++; return;
-      case 'admin.start': this.adminStarts++; return this.adminResult;
+      case 'admin.start': this.adminStarts++; this.adminMeta = a[0]; return this.adminResult;
       case 'admin.stop': return true;
+      case 'updater.state': return { status: 'idle', canAuto: false };
+      case 'win.fs': this.fsCalls = [...(this.fsCalls || []), !!a[0]]; return;
       default: return;
     }
   }
@@ -168,6 +172,29 @@ const outEnded = async (v, reason) => { let last = '';
   await V.page.mouse.move(box.x + 10, box.y + 10); await V.page.mouse.down(); await V.page.mouse.up(); await sleep(400);
   assert.equal(H.inputs.length, n0); await V.page.click('[data-action=t-control]');
   ok('режим «только просмотр» не отправляет ввод');
+
+  // пункт 2: экран сессии занимает почти всё окно (окно теста 1100×800)
+  const sb = await V.page.locator('#stageWrap').boundingBox();
+  assert(sb.width > 1050 && sb.height > 480, 'экран сессии слишком маленький: ' + Math.round(sb.width) + '×' + Math.round(sb.height));
+  { const sh = path.join(__dirname, 'shots'); fs.mkdirSync(sh, { recursive: true }); await V.page.screenshot({ path: path.join(sh, 'viewer-session.png') }); }
+  ok('экран сессии большой: ' + Math.round(sb.width) + '×' + Math.round(sb.height) + ' (раньше ≤ 934×' + Math.round(0.68 * 800) + ')');
+
+  // пункт 3: «во весь экран» — окно Electron уходит в fullscreen, окно сессии растягивается на всё окно, выход кнопкой и по Esc
+  await V.page.click('[data-action=t-full]');
+  await until(() => (V.fsCalls || []).at(-1) === true, 3000, 'окно переведено в полный экран');
+  const fb = await V.page.locator('#stage').boundingBox();
+  assert(fb.x === 0 && fb.y === 0 && fb.width >= 1099 && fb.height >= 799, 'stage должен занять всё окно: ' + JSON.stringify(fb));
+  await sleep(1500); // перерисовки (статистика, presence) не должны выкидывать из полного экрана
+  assert(await V.page.evaluate(() => document.body.classList.contains('stage-full') && !!document.querySelector('#stage video, #stageWrap video')));
+  assert.equal(await V.page.evaluate(() => getComputedStyle(document.querySelector('.topbar')).display), 'none');
+  await V.page.click('[data-action=t-full]');
+  await until(() => (V.fsCalls || []).at(-1) === false, 3000, 'выход из полного экрана кнопкой');
+  assert(!(await V.page.evaluate(() => document.body.classList.contains('stage-full'))));
+  await V.page.click('[data-action=t-full]'); await until(() => V.fsCalls.at(-1) === true, 3000, 'снова в полный экран');
+  await V.page.click('[data-action=t-control]'); await V.page.keyboard.press('Escape'); // без управления Esc выходит из полного экрана
+  await until(() => V.fsCalls.at(-1) === false, 3000, 'выход по Esc');
+  await V.page.click('[data-action=t-control]');
+  ok('кнопка «во весь экран»: входит, остаётся при перерисовках, выходит кнопкой и по Esc (при управлении Esc уходит на удалённый ПК)');
 
   // микрофон
   await V.page.click('[data-action=t-mic]');
@@ -265,6 +292,26 @@ const outEnded = async (v, reason) => { let last = '';
   await until(async () => V.S("S.out && S.out.adminPending === false && S.out.admin === false"), 10000, 'admin denied');
   assert.equal(H.adminStarts, 1); ok('отказ в админ-доступе: сессия продолжается, повышения нет');
   await V.page.evaluate(() => window.__sess.hangup()); await until(async () => !(await H.S('!!S.inSess')), 8000, 'closed');
+
+  // пункт 1: «вход по паролю сразу с правами администратора» — без запроса на хосте
+  await sleep(500);
+  H.cfg.passwordAdmin = true; await H.reload(); await sleep(800);
+  const as0 = H.adminStarts; H.adminResult = { ok: true };
+  await uiConnect(V, H, { mode: 'password', password: PW });          // галочку «админ» зритель НЕ ставит
+  await until(async () => V.S('S.out && S.out.admin === true'), 25000, 'admin выдан автоматически');
+  assert.equal(await H.S('S.prompts.length'), 0, 'запроса на хосте быть не должно');
+  assert.equal(H.adminStarts, as0 + 1); assert.equal(H.adminMeta.silent, true, 'в main должен уйти признак silent');
+  assert(H.cfg.log.some((e) => e.note && e.note.includes('автоматически')));
+  ok('вход по паролю при включённой галочке: права администратора выданы сразу, без запроса, в журнале пометка');
+  await V.page.evaluate(() => window.__sess.hangup()); await until(async () => !(await H.S('!!S.inSess')), 8000, 'closed');
+  // вход «с подтверждением» (не по паролю) по-прежнему просит отдельно, даже при включённой галочке
+  await sleep(500);
+  await uiConnect(V, H, { mode: 'ask', admin: true });
+  await until(async () => (await H.S('S.prompts.length')) === 1, 15000, 'prompt ask+admin'); await H.page.click('[data-action=allow]');
+  await until(async () => (await H.S("S.prompts.length === 1 && S.prompts[0].kind === 'admin'")), 15000, 'админ-запрос при входе «с подтверждением»');
+  ok('режим «с подтверждением» при включённой галочке всё равно спрашивает админ-доступ отдельно');
+  await H.page.click('[data-action=deny]'); await V.page.evaluate(() => window.__sess.hangup()); await until(async () => !(await H.S('!!S.inSess')), 8000, 'closed');
+  H.cfg.passwordAdmin = false; await H.reload(); await sleep(800);
 
   // ---- 8. список разрешённых
   H.cfg.allowedIds = ['999999999']; await H.reload();

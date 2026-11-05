@@ -75,8 +75,10 @@
   function show(name) {
     if (!$('view-' + name)) name = 'devices';
     S.view = name;
+    if (name !== 'session' && S.fs) setFullscreen(false); // пришёл запрос/уведомление — выходим из полного экрана, чтобы его увидели
     document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
+    document.body.classList.toggle('sess', name === 'session' && !!S.out);
     renderAll();
   }
   function switchHtml(on, action, locked) { return `<button class="switch${on ? ' on' : ''}${locked ? ' locked' : ''}" data-action="${action}" aria-pressed="${!!on}"></button>`; }
@@ -251,7 +253,7 @@
       S.inSess = ev.sess;
       if (ev.type === 'active') {
         B.app.notify('Bogestv0 REMOTE', `Вас подключил ${ev.sess.name} (ID ${fmtId(ev.sess.from)})`);
-        clearInterval(S.inTimer); S.inTimer = setInterval(() => { if (S.view === 'session') renderSession(); }, 1000);
+        clearInterval(S.inTimer); S.inTimer = setInterval(() => { if (S.view === 'session' && !S.out) renderSession(); }, 1000);
         location.hash = 'session';
       }
     }
@@ -273,7 +275,7 @@
       case 'clip-empty': toast('Ваш буфер обмена пуст или в нём не текст', true); break;
       case 'ended':
         if (S.out) { toast(ev.reason === 'kicked-by-me' ? 'Сессия завершена' : reasonText(ev.reason), !['kicked-by-me', 'ended'].includes(ev.reason)); }
-        S.out = null; S.streams = {}; attachStreams(); setFullscreen(false);
+        S.out = null; S.streams = {}; attachStreams(); setFullscreen(false); document.body.classList.remove('sess');
         if (S.view === 'session' && !S.inSess) location.hash = 'devices';
         break;
     }
@@ -292,25 +294,20 @@
     sp.muted = S.out ? !S.out.speakers : false;
     if (S.streams.speakers) setupMeter(S.streams.speakers);
   }
-  function setFullscreen(on) { const st = $('stage'); if (!st) return; if (on && !document.fullscreenElement) st.requestFullscreen().catch(() => {}); if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
-  const OUT_STATUS = { calling: 'Соединяемся…', 'waiting-approval': 'Ждём подтверждения на устройстве…', authenticating: 'Проверяем пароль…' };
-  /** В полноэкранном режиме нельзя заменять DOM окна сессии: удалённый из страницы элемент мгновенно выходит из fullscreen.
-   *  Поэтому пока окно развёрнуто, обновляем на месте только то, что меняется (подпись, кнопки, статистика). */
-  function patchStageInPlace() {
-    const o = S.out, st = $('stage'); if (!o || !st) return;
-    const connecting = o.state !== 'active';
-    const bl = st.querySelector('.session-banner-left');
-    if (bl) bl.innerHTML = `<span class="live-dot"></span>${connecting ? esc(OUT_STATUS[o.state] || 'Соединяемся…') : `Вы управляете «${esc(o.name)}»${o.admin ? ' · доступ администратора активен' : ''}${o.adminPending ? ' · ждём подтверждения администратора…' : ''}`}`;
-    const wrap = $('stageWrap');
-    if (wrap) { wrap.classList.toggle('control', !!o.control); const ov = wrap.querySelector('.stage-overlay'); if (ov && !connecting) ov.remove(); }
-    const cls = (a, c, on) => { const b = st.querySelector(`[data-action="${a}"]`); if (b) b.classList.toggle(c, !!on); };
-    cls('t-control', 'on', o.control); cls('t-admin', 'on', o.admin);
-    cls('t-spk', 'muted', !o.speakers); cls('t-mic', 'on', o.mic); cls('t-mic', 'muted', !o.mic);
-    st.querySelectorAll('[data-action="t-clip-send"],[data-action="t-clip-get"],[data-action="t-admin"]').forEach((b) => { b.disabled = connecting; });
-    updateStatsOnly();
+  /** «Во весь экран» = полноэкранное окно Electron + окно сессии, растянутое на всё окно (CSS .stage-full).
+   *  HTML Fullscreen API здесь не используем: он зависит от разрешений Chromium и сбрасывается при любой перерисовке DOM. */
+  function setFullscreen(on) {
+    on = !!on && !!S.out;
+    S.fs = on;
+    document.body.classList.toggle('stage-full', on);
+    try { B.win.setFullScreen(on); } catch {}
+    const b = document.querySelector('[data-action="t-full"]');
+    if (b) { b.classList.toggle('on', on); b.title = on ? 'Выйти из полноэкранного режима' : 'Во весь экран'; }
   }
+  const OUT_STATUS = { calling: 'Соединяемся…', 'waiting-approval': 'Ждём подтверждения на устройстве…', authenticating: 'Проверяем пароль…' };
   function renderSession() {
-    if (S.out && document.fullscreenElement && document.fullscreenElement.id === 'stage' && $('stage')) return patchStageInPlace();
+    document.body.classList.toggle('sess', S.view === 'session' && !!S.out);
+    document.body.classList.toggle('stage-full', !!S.fs && !!S.out);
     const parts = [];
     const o = S.out, s = S.inSess;
     if (!o && !(s && s.state === 'active')) {
@@ -320,14 +317,14 @@
     }
     if (o) {
       const connecting = o.state !== 'active';
-      parts.push(`<div><h1 class="page-title">Активная сессия</h1><div class="page-desc">${esc(o.name)} · ID ${fmtId(o.to)}</div></div>
+      parts.push(`<div class="sess-head"><h1 class="page-title">Активная сессия</h1><div class="page-desc">${esc(o.name)} · ID ${fmtId(o.to)}</div></div>
       <div class="session-stage" id="stage">
         <div class="session-banner"><div class="session-banner-left"><span class="live-dot"></span>${connecting ? esc(OUT_STATUS[o.state] || 'Соединяемся…') : `Вы управляете «${esc(o.name)}»${o.admin ? ' · доступ администратора активен' : ''}${o.adminPending ? ' · ждём подтверждения администратора…' : ''}`}</div>
           <button class="btn btn-danger btn-sm" data-action="hangup">Отключить сейчас</button></div>
         <div class="stage-wrap ${o.control ? 'control' : ''}" id="stageWrap">${connecting ? `<div class="stage-overlay"><div class="spinner"></div>${esc(OUT_STATUS[o.state] || 'Соединяемся…')}</div>` : ''}</div>
         <div class="toolbar">
           <button class="tool-btn ${o.control ? 'on' : ''}" data-action="t-control" title="${o.control ? 'Управление включено' : 'Только просмотр'}">${ICON.ptr}</button>
-          <button class="tool-btn" data-action="t-full" title="Во весь экран">${ICON.full}</button>
+          <button class="tool-btn ${S.fs ? 'on' : ''}" data-action="t-full" title="${S.fs ? 'Выйти из полноэкранного режима' : 'Во весь экран'}">${ICON.full}</button>
           ${(o.info && o.info.monitors && o.info.monitors.length > 1) ? `<select class="select" id="monSel" style="height:34px;border-radius:9px;background:rgba(255,255,255,.08);color:#fff;border:0;max-width:210px" title="Какой монитор показывать">${o.info.monitors.map((m) => `<option value="${esc(m.id)}" ${m.id === o.info.monitor ? 'selected' : ''} style="color:#000">${esc(m.label)}</option>`).join('')}</select>` : ''}
           <button class="tool-btn" data-action="t-clip-send" title="Отправить текст из вашего буфера обмена на удалённое устройство" ${connecting ? 'disabled' : ''}>${ICON.clipUp}</button>
           <button class="tool-btn" data-action="t-clip-get" title="Получить текст из буфера обмена удалённого устройства" ${connecting ? 'disabled' : ''}>${ICON.clipDown}</button>
@@ -460,7 +457,7 @@
         <div class="setting-row"><div class="field"><label>Пароль для входа без подтверждения</label><input type="text" value="${c.hasPassword ? '•••••••• — задан' : 'не задан'}" readonly>
           <span class="hint">Задаёте и меняете только вы на этом устройстве. Используется вместе с ID — отдельно не работает. Хранится зашифрованным.</span></div>
           <button class="btn btn-ghost btn-sm" style="align-self:center" data-action="sec-password">${c.hasPassword ? 'Сменить пароль' : 'Задать пароль'}</button></div>
-        <div class="setting-row"><div><div class="setting-label">Права администратора по запросу</div><div class="setting-help">Даже при включённом входе без подтверждения повышение до администратора — отдельный запрос с явным «Разрешить» и окном UAC, каждый раз.</div></div>${switchHtml(true, '', true)}</div>
+        <div class="setting-row"><div><div class="setting-label">Вход по паролю сразу с правами администратора</div><div class="setting-help">${c.passwordAdmin ? 'Включено: кто вошёл по паролю, сразу получает права администратора — без запроса и без окна UAC.' : 'Выключено: права администратора выдаются отдельным запросом с явным «Разрешить» и окном UAC, каждый раз.'} ${c.hasPassword ? '' : 'Сначала задайте пароль.'}${c.passwordAdmin && !S.svc ? ' Служба не установлена — окно UAC придётся подтверждать вручную.' : ''}</div></div>${switchHtml(c.passwordAdmin, 'sec-pwadmin', !c.hasPassword)}</div>
         <div class="setting-row"><div><div class="setting-label">Разрешённые устройства для входа без подтверждения</div><div class="setting-help">${c.allowedIds.length ? `Только эти ${c.allowedIds.length} устройств могут входить по паролю. С остальных — обычный запрос с ожиданием ответа.` : 'Список пуст — по паролю может войти любой ID, знающий пароль. Рекомендуем ограничить список.'}</div></div>
           <button class="btn btn-ghost btn-sm" data-action="sec-allowed">Управлять списком</button></div>
       </div>
@@ -505,6 +502,7 @@
       <div class="field"><label>Новый пароль (минимум 8 символов)</label><input id="pw1" type="text" autocomplete="off" autofocus></div>
       <div class="row-actions"><button class="btn btn-ghost btn-sm" data-gen>Сгенерировать</button><button class="btn btn-ghost btn-sm" data-cp>Скопировать</button></div>
       <div class="hint">Запишите пароль: он нужен тому, кто будет подключаться по ID. Здесь он хранится только зашифрованным.</div>
+      <label class="check"><input type="checkbox" id="pwAdmin" ${S.cfg.passwordAdmin ? 'checked' : ''}><span>Подключившиеся по паролю сразу получают права администратора<br><span class="hint">Без отдельного запроса и без окна UAC. Тот, кто знает пароль, получает полный контроль над этим компьютером — задайте длинный пароль и ограничьте список разрешённых устройств. Включение подтверждается системным окном на этом компьютере.</span></span></label>
       <div class="err-text" id="mErr"></div>
       <div class="modal-actions">${S.cfg.hasPassword ? '<button class="btn btn-danger" data-rm style="margin-right:auto">Удалить пароль</button>' : ''}<button class="btn btn-ghost" data-c>Отмена</button><button class="btn btn-primary" data-ok>Сохранить</button></div>`,
     (m, close) => {
@@ -515,6 +513,13 @@
       m.querySelector('[data-ok]').onclick = async () => {
         const r = await B.cfg.setPassword(m.querySelector('#pw1').value);
         if (!r.ok) return (m.querySelector('#mErr').textContent = r.error);
+        const want = m.querySelector('#pwAdmin').checked;
+        if (want !== !!S.cfg.passwordAdmin) {
+          m.querySelector('#mErr').textContent = want ? 'Подтвердите включение в системном окне на этом компьютере…' : '';
+          const r2 = await B.cfg.set({ passwordAdmin: want });
+          if (!r2.ok) { await refreshCfg(); renderAll(); return (m.querySelector('#mErr').textContent = 'Пароль сохранён, но ' + r2.error.charAt(0).toLowerCase() + r2.error.slice(1)); }
+          if (r2.warn) toast(r2.warn);
+        }
         await refreshCfg(); close(); renderAll(); toast('Пароль сохранён');
       };
     });
@@ -548,13 +553,14 @@
       case 'hangup': return sess.hangup();
       case 'kick': return sess.kickIn();
       case 't-control': S.out.control = !S.out.control; return renderAll();
-      case 't-full': return setFullscreen(!document.fullscreenElement);
+      case 't-full': return setFullscreen(!S.fs);
       case 't-clip-send': return sess.clipSend();
       case 't-clip-get': return sess.clipGet();
       case 't-admin': if (!S.out.admin && !S.out.adminPending) { S.out.adminPending = true; sess.requestAdmin(); toast('Запрос отправлен — подтвердите на удалённом устройстве'); renderAll(); } return;
       case 't-spk': case 'a-spk': S.out.speakers = !S.out.speakers; sess.setSpeakers(S.out.speakers); attachStreams(); return renderAll();
       case 't-mic': case 'a-mic': { S.out.mic = !S.out.mic; const sel = $('micSel'); sess.setMic(S.out.mic, sel && sel.value); return renderAll(); }
       case 'sec-unattended': { const r = await B.cfg.set({ unattended: !S.cfg.unattended }); if (!r.ok) toast(r.error, true); await refreshCfg(); return renderAll(); }
+      case 'sec-pwadmin': { toast(S.cfg.passwordAdmin ? 'Выключаем…' : 'Подтвердите включение в системном окне на этом компьютере…'); const r = await B.cfg.set({ passwordAdmin: !S.cfg.passwordAdmin }); if (!r.ok) toast(r.error, true); else if (r.warn) toast(r.warn); await refreshCfg(); return renderAll(); }
       case 'sec-autostart': await B.cfg.set({ autostart: !S.cfg.autostart }); await refreshCfg(); return renderAll();
       case 'sec-tray': await B.cfg.set({ minimizeToTray: !S.cfg.minimizeToTray }); await refreshCfg(); return renderAll();
       case 'sec-relay': await B.cfg.set({ relayOnly: !(S.cfg.relayOnly === true) }); await refreshCfg(); return renderAll();
@@ -579,7 +585,9 @@
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', (e) => { e.preventDefault(); location.hash = t.dataset.view; }));
   window.addEventListener('hashchange', () => show(location.hash.slice(1)));
   document.addEventListener('change', (e) => { if (e.target && e.target.id === 'monSel') sess.sendMonitor(e.target.value); });
-  document.addEventListener('fullscreenchange', () => { if (S.view === 'session') renderSession(); });
+  // Esc выходит из полного экрана, только если им не управляют удалённым компьютером (иначе Esc уходит туда)
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.fs && !ctl()) setFullscreen(false); });
+  B.win.onFullscreen((on) => { if (!on && S.fs) { S.fs = false; document.body.classList.remove('stage-full'); const b = document.querySelector('[data-action="t-full"]'); if (b) { b.classList.remove('on'); b.title = 'Во весь экран'; } } });
 
   // ------------------------------------------------------------------ главный цикл
   function renderAll() {

@@ -293,25 +293,28 @@
         this.bridge.app.setActive(true);
         this.hooks.log({ who: s.name, id: s.from, kind: s.mode === 'password' ? 'password' : 'ask', note: s.mode === 'password' ? 'без подтверждения' : 'запрос подтверждён' });
         this.hooks.onIn({ type: 'active', sess: this.pub(s) });
-        if (s.wantAdmin) this.hostAdmin(s);
+        if (s.wantAdmin || this.autoAdmin(s)) this.hostAdmin(s);
       } catch (e) {
         console.error('grant', e); s.sendCtl && s.sendCtl({ k: 'denied', reason: 'capture-failed' }); this.endIn('capture-failed', false);
       }
     }
+    /** Владелец включил «вход по паролю сразу с правами администратора» — для входа по паролю отдельный запрос не нужен. */
+    autoAdmin(s) { const c = (this.hooks.getCfg && this.hooks.getCfg()) || {}; return s.mode === 'password' && c.passwordAdmin === true; }
     async hostAdmin(s) {
       if (s.perms.admin || s.adminBusy) return;
       s.adminBusy = true;
       try {
-        // всегда отдельный явный запрос — даже при входе по паролю
-        const ok = await this.hooks.askUser({ kind: 'admin', from: s.from, name: s.name, admin: true });
+        // по умолчанию — всегда отдельный явный запрос, даже при входе по паролю; без запроса только при включённом режиме владельца
+        const auto = this.autoAdmin(s);
+        const ok = auto || await this.hooks.askUser({ kind: 'admin', from: s.from, name: s.name, admin: true });
         if (this.incoming !== s) return;
         if (!ok) { s.sendCtl({ k: 'admin', ok: false, reason: 'denied' }); this.hooks.log({ who: s.name, id: s.from, kind: 'admin-denied', note: 'админ-доступ отклонён' }); return; }
-        const r = await this.bridge.admin.start({ from: s.from, name: s.name });
+        const r = await this.bridge.admin.start({ from: s.from, name: s.name, silent: auto });
         if (this.incoming !== s) { if (r.ok) { this.stopSecure(s); this.bridge.admin.stop(); } return; }
         s.perms.admin = !!r.ok;
         if (r.ok && r.system) this.startSecure(s);
         s.sendCtl({ k: 'admin', ok: !!r.ok, reason: r.error || '' });
-        this.hooks.log({ who: s.name, id: s.from, kind: r.ok ? 'admin' : 'admin-failed', note: r.ok ? 'админ-доступ подтверждён' : (r.error || 'не удалось') });
+        this.hooks.log({ who: s.name, id: s.from, kind: r.ok ? 'admin' : 'admin-failed', note: r.ok ? (auto ? 'админ-доступ выдан автоматически (вход по паролю)' : 'админ-доступ подтверждён') : (r.error || 'не удалось') });
         this.hooks.onIn({ type: 'admin', sess: this.pub(s) });
       } finally { s.adminBusy = false; }
     }

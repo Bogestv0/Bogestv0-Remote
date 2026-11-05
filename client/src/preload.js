@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('bridge', {
     onNavigate: (cb) => on('nav', cb),
     ready: () => ipcRenderer.invoke('app:ready'),
   },
+  win: { setFullScreen: (on) => ipcRenderer.send('win:fs', !!on), onFullscreen: (cb) => on('win:fs-state', cb) },
   screen: { source: (id) => ipcRenderer.invoke('screen:source', id), list: () => ipcRenderer.invoke('screen:list') },
   input: { send: (ev) => ipcRenderer.send('input:ev', ev), release: () => ipcRenderer.send('input:release') },
   admin: { start: (meta) => ipcRenderer.invoke('admin:start', meta), stop: () => ipcRenderer.invoke('admin:stop'), serviceStatus: () => ipcRenderer.invoke('service:status'), capture: (on) => ipcRenderer.send('helper:capture', on), onDesktop: (cb) => on('helper:desktop', cb), onFrame: (cb) => on('helper:frame', cb) },

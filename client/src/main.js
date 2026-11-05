@@ -33,7 +33,7 @@ app.on('second-instance', () => showWindow());
 // ---------------------------------------------------------------- окно / трей
 function createWindow() {
   win = new BrowserWindow({
-    width: 1120, height: 820, minWidth: 760, minHeight: 560,
+    width: 1280, height: 860, minWidth: 900, minHeight: 600,
     show: !HIDDEN, autoHideMenuBar: true, backgroundColor: '#eef0f6',
     title: 'Bogestv0 REMOTE', icon: R('logo.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
@@ -55,6 +55,8 @@ function createWindow() {
     const now = Date.now();
     for (const q of pending.queue.splice(0)) if (now - q.t < 30000) win.webContents.send(q.ch, q.payload);
   });
+  // Выход из полного экрана средствами системы (F11, Alt+Enter и т.п.) — сообщаем интерфейсу, чтобы он вернул обычный вид
+  win.on('leave-full-screen', () => { if (!win.isDestroyed()) win.webContents.send('win:fs-state', false); });
   win.loadFile(R('index.html'));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -127,16 +129,26 @@ function tryConnect(port, token, timeoutMs = 1500) {
   });
 }
 // Служба (если установлена): сама покажет системное окно «Да/Нет» и запустит SYSTEM-помощника.
-function askService(meta) {
+function serviceCall(msg, timeoutMs = 45000) {
   return new Promise((resolve) => {
     const s = net.connect(47931, '127.0.0.1'); let buf = ''; let done = false;
     const fin = (v) => { if (!done) { done = true; try { s.destroy(); } catch {} resolve(v); } };
     s.setEncoding('utf8');
-    s.on('connect', () => s.write(JSON.stringify({ cmd: 'start-helper', pid: process.pid, from: meta && meta.from, name: meta && meta.name }) + '\n'));
+    s.on('connect', () => s.write(JSON.stringify({ ...msg, pid: process.pid }) + '\n'));
     s.on('data', (d) => { buf += d; if (buf.includes('\n')) { try { fin(JSON.parse(buf.split('\n')[0])); } catch { fin(null); } } });
     s.on('error', () => fin(null));
-    s.setTimeout(45000, () => fin(null));
+    s.setTimeout(timeoutMs, () => fin(null));
   });
+}
+// silent — «вход по паролю сразу с правами администратора»: служба пропустит своё окно согласия, только если владелец
+// ранее подтвердил этот режим на самом компьютере; здесь дополнительно сверяемся с настройкой приложения.
+const askService = (meta) => serviceCall({ cmd: 'start-helper', from: meta && meta.from, name: meta && meta.name, silent: !!(meta && meta.silent && store.data.passwordAdmin) });
+/** Включить/выключить «молчаливый» админ-режим в службе. Включение службе подтверждает системное окно на компьютере. */
+async function serviceSetSilent(on) {
+  const st = await serviceStatus();
+  if (!st.installed) return { installed: false };
+  const r = await serviceCall({ cmd: 'set-silent', on: !!on }, 45000);
+  return { installed: true, ok: !!(r && r.ok), err: r && r.err };
 }
 async function serviceStatus() {
   if (process.platform !== 'win32') return { installed: false };
@@ -219,12 +231,22 @@ function registerIpc() {
     ...store.publicView(), hostname: os.hostname(), version: app.getVersion(), platform: process.platform,
     injector: injector.available, sig: state(),
   }));
-  ipcMain.handle('cfg:set', (_e, patch) => {
-    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'relayOnly', 'devices', 'server', 'name'];
-    let restart = false;
+  ipcMain.handle('cfg:set', async (_e, patch) => {
+    const allowed = ['unattended', 'allowedIds', 'autostart', 'minimizeToTray', 'relayOnly', 'devices', 'server', 'name', 'passwordAdmin'];
+    let restart = false; let warn = '';
     for (const k of Object.keys(patch || {})) {
       if (!allowed.includes(k)) continue;
       if (k === 'unattended' && patch[k] && !store.data.passwordEnc) return { ok: false, error: 'Сначала задайте пароль' };
+      if (k === 'passwordAdmin') {
+        const on = patch[k] === true;
+        if (on && !store.data.passwordEnc) return { ok: false, error: 'Сначала задайте пароль' };
+        if (on !== store.data.passwordAdmin || !on) {
+          const r = await serviceSetSilent(on);
+          if (on && r.installed && !r.ok) return { ok: false, error: r.err === 'denied' ? 'Режим не включён: подтверждение на компьютере не получено' : 'Служба не смогла включить режим: ' + (r.err || 'нет ответа') };
+          if (on && !r.installed) warn = 'Служба не установлена (портативная версия): окно UAC на этом компьютере всё равно придётся подтверждать вручную.';
+        }
+        store.data.passwordAdmin = on; continue;
+      }
       if (k === 'server') {
         const s = patch.server || {};
         const host = String(s.host || '').trim(); const port = Number(s.port);
@@ -239,13 +261,13 @@ function registerIpc() {
     }
     store.save(); applyAutostart();
     if (restart) sig.restart();
-    return { ok: true };
+    return { ok: true, warn };
   });
   ipcMain.handle('cfg:setPassword', (_e, pw) => {
     pw = String(pw || '');
     if (pw && pw.length < 8) return { ok: false, error: 'Минимум 8 символов' };
     store.setPassword(pw);
-    if (!pw) store.data.unattended = false;
+    if (!pw) { store.data.unattended = false; if (store.data.passwordAdmin) { store.data.passwordAdmin = false; serviceSetSilent(false).catch(() => {}); } }
     return { ok: true };
   });
   ipcMain.handle('cfg:getSecret', () => store.getPassword());
@@ -281,6 +303,7 @@ function registerIpc() {
   ipcMain.handle('app:readClipboard', () => clipboard.readText().slice(0, 200000));
   ipcMain.on('input:ev', (_e, ev) => { try { inject(ev); } catch (err) { console.error('inject', err); } });
   ipcMain.on('input:release', () => { selectedDisplay = null; try { injector.releaseAll(); helperSend({ k: 'release' }); } catch {} });
+  ipcMain.on('win:fs', (_e, on) => { if (win && !win.isDestroyed()) win.setFullScreen(!!on); });
   ipcMain.handle('admin:start', (_e, meta) => startHelper(meta));
   ipcMain.handle('service:status', () => serviceStatus());
   ipcMain.on('helper:capture', (_e, on) => helperSend({ k: 'capture', on: !!on }));
@@ -310,8 +333,11 @@ app.whenReady().then(() => {
   updater.on('installing', () => { quitting = true; });
 
   const ses = session.defaultSession;
-  ses.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && wc.getURL().startsWith('file://')));
-  ses.setPermissionCheckHandler((wc, perm) => perm === 'media');
+  // Только свои страницы (file://) и только нужные права. «fullscreen» нужен для кнопки «во весь экран»:
+  // раньше обработчик запрещал всё, кроме media, из-за этого полноэкранный режим молча не включался.
+  const ALLOWED = ['media', 'fullscreen', 'pointerLock', 'keyboardLock'];
+  ses.setPermissionRequestHandler((wc, perm, cb) => cb(ALLOWED.includes(perm) && wc.getURL().startsWith('file://')));
+  ses.setPermissionCheckHandler((wc, perm) => ALLOWED.includes(perm));
 
   registerIpc();
   createWindow();

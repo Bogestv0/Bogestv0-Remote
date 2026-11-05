@@ -32,6 +32,12 @@ const PORT = 21000 + Math.floor(Math.random() * 500);
   console.log('screen.source ->', src ? `${src.width}x${src.height}` : 'null (в xvfb может не быть экрана)');
   const fontOk = await win.evaluate(() => document.fonts.check('700 16px Manrope') && document.fonts.check('400 14px Onest'));
   console.log('ok: локальные шрифты загружены:', fontOk);
+  // полный экран: окно Electron действительно переходит в fullscreen и выходит обратно
+  await win.evaluate(() => window.bridge.win.setFullScreen(true)); await sleep(1200);
+  if (!(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()))) throw new Error('окно не перешло в полный экран');
+  await win.evaluate(() => window.bridge.win.setFullScreen(false)); await sleep(1200);
+  if (await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())) throw new Error('окно не вышло из полного экрана');
+  console.log('ok: полноэкранный режим окна включается и выключается');
   if (errs.length) throw new Error('page errors: ' + errs.join('; '));
   await app.close();
 

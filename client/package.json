@@ -1,7 +1,7 @@
 {
   "name": "bogestv0-remote",
   "productName": "Bogestv0 REMOTE",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Bogestv0 REMOTE — удалённый доступ к компьютеру",
   "main": "src/main.js",
   "author": "Bogestv0",

@@ -38,6 +38,24 @@ console.log('ok: размеры структур WinAPI');
   assert(a.ok && b.err === 'busy');
   console.log('ok: служба — подтверждение обязательно, лимит частоты, чужая сессия, одновременные запросы');
 
+  // 3b) «молчаливый» админ-режим: без предварительного подтверждения владельцем silent игнорируется
+  {
+    let t2 = 500000, asked = 0, ok = true; const sp = []; const saved = { o: {} };
+    const api2 = { activeSession: () => 1, sessionOfPid: () => 1, consent: async () => { asked++; return ok; }, spawnInSession: (o) => { sp.push(o); return { pid: 1 }; } };
+    const mk = () => createService({ api: api2, exePath: 'e', helperScript: 'h', now: () => t2, pickPort: () => 49600, store: { load: () => saved.o, save: (o) => { saved.o = o; } } });
+    let s2 = mk();
+    let r2 = await s2.startHelper({ silent: true }, 1); assert(r2.ok && asked === 1, 'без включённого режима silent не отменяет окно согласия');
+    t2 += 6000; ok = false; r2 = await s2.setSilent(true, 1); assert.equal(r2.err, 'denied'); assert.equal(s2.isSilent(), false);
+    t2 += 6000; ok = true; asked = 0; r2 = await s2.setSilent(true, 1); assert(r2.ok && asked === 1 && s2.isSilent(), 'включение режима требует системного окна');
+    r2 = await s2.startHelper({ silent: true }, 1); assert(r2.ok && asked === 1, 'при включённом режиме окно согласия пропускается'); assert.equal(sp.length, 2);
+    t2 += 6000; r2 = await s2.startHelper({}, 1); assert(r2.ok && asked === 2, 'запрос без silent по-прежнему показывает окно');
+    s2 = mk(); assert.equal(s2.isSilent(), true, 'режим переживает перезапуск службы');
+    t2 += 6000; await s2.setSilent(false, 1); assert.equal(s2.isSilent(), false); assert.equal(mk().isSilent(), false);
+    t2 += 6000; asked = 0; r2 = await s2.startHelper({ silent: true }, 1); assert(r2.ok && asked === 1, 'после выключения окно снова показывается');
+    api2.activeSession = () => null; assert.equal((await s2.setSilent(true, 1)).err, 'no-session');
+    console.log('ok: служба — молчаливый админ-режим включается только системным окном, переживает перезапуск, выключается');
+  }
+
   // 4) helper-system: токен, ввод, кадры при защищённом столе, выход
   const calls = []; let secure = false;
   const desk = { dpiAware() {}, sync: () => ({ name: secure ? 'Winlogon' : 'Default', changed: false }), capture: () => ({ w: 2, h: 2, rgba: Buffer.alloc(16, 9) }) };
