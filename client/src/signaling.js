@@ -57,7 +57,11 @@ class Signaling extends EventEmitter {
     });
 
     ws.on('message', (raw) => {
-      let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+      const text = raw.toString();
+      let m; try { m = JSON.parse(text); } catch (e) { this.diag('recv: НЕ РАЗОБРАН JSON, длина ' + text.length + ': ' + (e && e.message)); return; }
+      // Журнал приёма на уровне сокета: если здесь строка есть, а в журнале сессии нет `sig<-` — сообщение потеряно между сокетом и окном.
+      if (m.t === 'signal') { const k = m.data && m.data.k; if (k !== 'ice') this.diag('recv signal ' + k + ' от ' + m.from + ' длина ' + text.length); else this.iceRx = (this.iceRx || 0) + 1; }
+      else if (m.t !== 'pong') this.diag('recv ' + m.t + ' длина ' + text.length);
       switch (m.t) {
         case 'welcome':
           this.diag('welcome, ID ' + m.id);
@@ -72,7 +76,7 @@ class Signaling extends EventEmitter {
           this.hello();
           break;
         case 'ice': this.ice = m.ice || []; this.emit('ice', this.ice); break;
-        case 'pong': break;
+        case 'pong': this.pongAt = Date.now(); break;
         default: this.emit('message', m);
       }
     });
@@ -93,7 +97,15 @@ class Signaling extends EventEmitter {
     this.send({ t: 'hello', id: this.store.data.id, token: this.store.data.token, name: this.store.data.name || os.hostname() });
   }
   keepalive() {
-    const tick = () => { this.send({ t: 'ping' }); this.timers.push(setTimeout(tick, 25000)); };
+    // Раньше pong не проверялся: «зависший» сокет (сеть сменилась, сервер не отвечает) считался живым. Теперь нет pong 10 с — переподключаемся.
+    const tick = () => {
+      const ws = this.ws; const sentAt = Date.now();
+      if (!this.send({ t: 'ping' })) { this.timers.push(setTimeout(tick, 25000)); return; }
+      this.timers.push(setTimeout(() => {
+        if (this.ws === ws && ws && (this.pongAt || 0) < sentAt) { this.diag('нет pong 10 с — сокет считается зависшим, переподключаюсь'); try { ws.terminate(); } catch {} }
+      }, 10000));
+      this.timers.push(setTimeout(tick, 25000));
+    };
     this.timers.push(setTimeout(tick, 25000));
   }
   scheduleRetry() {
