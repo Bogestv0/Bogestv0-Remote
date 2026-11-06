@@ -1,8 +1,6 @@
 
-/* (из макета) layout concept: top bar + a segmented pill switcher for the four screens,
-   content stacks in a single column of wide panels (no side rail) — a
-   different skeleton from a sidebar app, built around an indigo accent and
-   left-edge status bars instead of tinted pill badges */
+/* Каркас: верхняя панель с переключателем экранов, содержимое — колонка широких панелей, акцентный цвет — синий,
+   статусы отмечены полосой слева. */
 :root{
   --bg:#eef0f6; --surface:#fff; --surface-2:#f4f5fa; --line:#dfe2ec;
   --fg:#15151a; --muted:#6b6f80;
@@ -365,7 +363,17 @@ table.log tr:not(:first-child):hover td{background:var(--surface-2)}
 .view.active{animation:fade .18s ease}
 
 /* верхняя панель не ломается на узком окне */
-@media (max-width:1240px){#accName{display:none}.account{padding:5px}.dl-chip#verChip{display:none}}
+@media (max-width:1240px){#accName{display:none}.account{padding:5px}.dl-chip#verChip .ver-os{display:none}}
 @media (min-width:721px){.topbar{flex-wrap:nowrap}.tabs{overflow-x:auto;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}.tab{white-space:nowrap}}
 .srcrow{display:flex;gap:9px;align-items:center;margin-top:9px;flex-wrap:wrap}
 .srcrow .select{flex:1 1 260px;min-width:0;max-width:420px}
+
+/* ---- об авторе ---- */
+.modal.modal-about{max-width:620px}
+.about-meta{font-size:14px;line-height:1.75;color:var(--muted)}
+.about-meta b{color:var(--fg)}
+.about-link,.author-foot a{color:var(--accent);text-decoration:none;font-weight:600;cursor:pointer}
+.about-link:hover,.author-foot a:hover{text-decoration:underline}
+.about-text p{font-size:14px;line-height:1.6;margin:0 0 8px}
+.about-art{font:400 11px/1.25 'IBM Plex Mono',monospace;color:var(--accent);background:var(--surface-2);border-radius:10px;padding:12px;margin:0;overflow:auto;white-space:pre}
+.author-foot{text-align:center;font:500 12.5px 'Onest',sans-serif;color:var(--muted);padding:8px 0 4px}

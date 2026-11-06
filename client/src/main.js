@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, desktopCapturer, screen, nativeImage, session, safeStorage, clipboard } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, desktopCapturer, screen, nativeImage, session, safeStorage, clipboard, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -10,6 +10,7 @@ const { Store } = require('./store');
 const { Signaling } = require('./signaling');
 const { createInjector } = require('./input');
 const { Updater } = require('./updater');
+const single = require('./single');
 
 const HIDDEN = process.argv.includes('--hidden');
 const R = (f) => path.join(__dirname, 'renderer', f);
@@ -28,7 +29,7 @@ let selectedDisplay = null; // id выбранного монитора; null = 
 const currentDisplay = () => screen.getAllDisplays().find((d) => d.id === selectedDisplay) || screen.getPrimaryDisplay();
 
 if (!app.requestSingleInstanceLock()) { app.quit(); return; }
-app.on('second-instance', () => showWindow());
+app.on('second-instance', () => showWindow(null, true));
 
 // ---------------------------------------------------------------- окно / трей
 function createWindow() {
@@ -65,10 +66,12 @@ function createWindow() {
     if (!quitting && (store.data.minimizeToTray || sessionActive)) { e.preventDefault(); win.hide(); }
   });
 }
-function showWindow(view) {
-  if (!win) return;
+/** raise — повторный запуск пользователем: развернуть из свёрнутого/трея и вывести поверх (обычный focus() Windows может лишь мигнуть в панели задач). */
+function showWindow(view, raise) {
+  if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
-  win.show(); win.focus();
+  if (raise) { win.setAlwaysOnTop(true); win.show(); win.focus(); win.setAlwaysOnTop(false); }
+  else { win.show(); win.focus(); }
   if (view) win.webContents.send('nav', view);
 }
 function trayMenu() {
@@ -320,6 +323,8 @@ function registerIpc() {
   });
   ipcMain.handle('app:setActive', (_e, v) => setTrayActive(v));
   ipcMain.handle('app:copy', (_e, t) => clipboard.writeText(t));
+  // Ссылка на Telegram-канал автора: открывается в браузере; адрес зашит, из окна его подменить нельзя
+  ipcMain.handle('app:openChannel', () => shell.openExternal('https://t.me/bogestv0'));
   ipcMain.handle('screen:list', () => {
     const prim = screen.getPrimaryDisplay().id;
     return screen.getAllDisplays().map((d, i) => ({
@@ -361,7 +366,9 @@ function registerIpc() {
 }
 
 // ---------------------------------------------------------------- запуск
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // вторая копия не должна ни открывать окно, ни заводить своё устройство: просим первую показаться и выходим
+  if ((await single.claim(() => showWindow(null, true))) === 'running') { app.exit(0); return; }
   store = new Store(app.getPath('userData'), safeStorage);
   if (!store.data.name) store.data.name = os.hostname();
   injector = createInjector((...a) => console.log(...a));

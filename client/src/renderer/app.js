@@ -1,4 +1,4 @@
-/* Bogestv0 REMOTE — интерфейс (по макету). Вся «настоящая» работа — в session.js и main-процессе. */
+/* Bogestv0 REMOTE — интерфейс. Протокол сессии — в session.js, системные функции — в main-процессе. */
 (function () {
   'use strict';
   const B = window.bridge;
@@ -89,13 +89,52 @@
   }
   function switchHtml(on, action, locked) { return `<button class="switch${on ? ' on' : ''}${locked ? ' locked' : ''}" data-action="${action}" aria-pressed="${!!on}"></button>`; }
 
+  // ------------------------------------------------------------------ об авторе
+  const ABOUT_ART = `    Я очень             сильно л        
+    юблю теб            я маша I        
+ love you so muc    h Masha Te quier    
+o muchisimo Mash    a Je t'aime tres    
+ fort Masha Ich liebe dich sehr Masha Ti
+ amo tantissimo Masha Я дуже сильно коха
+ю тебе маша Kocham cie bardzo mocno Masz
+a Я очень сильно люблю тебя маша I love 
+    you so much Masha Te quiero much    
+    isimo Masha Je t'aime tres fort     
+        Masha Ich liebe dich seh        
+        r Masha Ti amo tantissim        
+            o Masha Я дуже с            
+            ильно кохаю тебе            
+                 маша Ko                
+                cham cie                `;
+  function aboutDialog() {
+    modal(`<h2>Bogestv0 REMOTE <span class="hint">v${esc(S.cfg.version)}</span></h2>
+      <div class="about-meta"><b>Автор:</b> Михаил<br>© 2026 Bogestv0. Все права защищены.<br>Лицензия: AGPL-3.0-or-later<br>Telegram-канал: <a href="#" class="about-link" data-action="open-channel">t.me/bogestv0</a></div>
+      <div class="about-text"><p>Я устал от программ удалённого доступа, где за всё просят деньги, а без оплаты показывают рекламу и вводят ограничения. Поэтому я создал своё приложение — без подписок, рекламы и лишних условий.</p>
+      <p>Была и более личная причина. Моя любимая девушка не могла подключаться к рабочему компьютеру удалённо и делать отчёты, и меня это беспокоило. Теперь всё решено, и всё работает.</p></div>
+      <pre class="about-art">${esc(ABOUT_ART)}</pre>
+      <div class="modal-actions"><button class="btn btn-primary" data-c>Закрыть</button></div>`,
+    (m, close) => {
+      m.classList.add('modal-about');
+      m.querySelector('[data-c]').onclick = close;
+      const onKey = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+      document.addEventListener('keydown', onKey);
+    });
+  }
+  // 10 нажатий подряд на значок версии (пауза между нажатиями не больше 2 секунд)
+  let verClicks = 0, verTimer = null;
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#verChip')) return;
+    clearTimeout(verTimer); verTimer = setTimeout(() => { verClicks = 0; }, 2000);
+    if (++verClicks >= 10) { verClicks = 0; clearTimeout(verTimer); aboutDialog(); }
+  });
+
   // ------------------------------------------------------------------ верхняя панель
   function renderTop() {
     const chip = $('statusChip');
     chip.classList.toggle('bad', !S.sig.connected);
     $('statusText').textContent = S.sig.connected ? `В сети · ID ${fmtId(S.cfg.id)}` : 'Нет связи с сервером';
     chip.title = S.sig.connected ? 'Нажмите, чтобы скопировать ID. Окно можно закрыть — приложение продолжит работать в трее' : (S.sig.error || 'Подключаемся…');
-    $('verChip').textContent = `v${S.cfg.version} · ${S.cfg.platform === 'win32' ? 'Windows' : S.cfg.platform}`;
+    $('verChip').innerHTML = `v${esc(S.cfg.version)}<span class="ver-os"> · ${esc(S.cfg.platform === 'win32' ? 'Windows' : S.cfg.platform)}</span>`;
     const u = S.upd, uc = $('updChip');
     const show = u && ['available', 'downloading', 'ready'].includes(u.status);
     uc.classList.toggle('hidden', !show);
@@ -173,9 +212,9 @@
         <div><div class="t">С подтверждением</div><div class="d">На том устройстве появится окно «Разрешить / Отклонить». Пароль не нужен.</div></div></label>
       <label class="radio-card ${saved ? 'sel' : ''}" data-mode="password"><input type="radio" name="mode" value="password" ${saved ? 'checked' : ''}>
         <div><div class="t">По паролю</div><div class="d">Без клика на том устройстве. Работает, если там включён вход по паролю и ваш ID разрешён. Уведомление всё равно покажется.</div></div></label>
-      <div class="field ${saved ? '' : 'hidden'}" id="pwBox"><label>Пароль устройства</label><input id="mPw" type="password" autocomplete="off" placeholder="${saved ? 'сохранён — оставьте пустым, чтобы использовать его' : ''}">
-        <label class="check" style="margin-top:6px"><input type="checkbox" id="mRemember" ${saved ? 'checked' : ''}><span>Запомнить пароль для этого устройства<br><span class="hint">Хранится зашифрованным на этом компьютере. В следующий раз кнопка «Подключиться» войдёт сразу.</span></span></label></div>
-      <label class="check"><input type="checkbox" id="mAdmin" ${saved && saved.admin ? 'checked' : ''}><span>Запросить права администратора<br><span class="hint">Отдельное подтверждение на том устройстве (окно Windows UAC), если владелец не включил автоадминистратора по паролю</span></span></label>
+      <div class="field ${saved ? '' : 'hidden'}" id="pwBox"><label>Пароль устройства</label><input id="mPw" type="password" autocomplete="off" placeholder="${saved ? 'сохранён — оставьте пустым, чтобы использовать его' : ''}"></div>
+      <label class="check ${saved ? '' : 'hidden'}" id="rememberBox"><input type="checkbox" id="mRemember" ${saved ? 'checked' : ''}><span>Запомнить пароль для этого устройства<br><span class="hint">Хранится зашифрованным на этом компьютере. В следующий раз кнопка «Подключиться» войдёт сразу.</span></span></label>
+      <label class="check ${saved ? 'hidden' : ''}" id="adminBox"><input type="checkbox" id="mAdmin"><span>Запросить права администратора<br><span class="hint">Отдельное подтверждение на том устройстве (окно Windows UAC)</span></span></label>
       <div class="err-text" id="mErr"></div>
       <div class="modal-actions">${saved ? '<button class="btn btn-danger" data-forget style="margin-right:auto">Забыть пароль</button>' : ''}<button class="btn btn-ghost" data-c>Отмена</button><button class="btn btn-primary" data-ok>Подключиться</button></div>`,
     (m, close) => {
@@ -186,16 +225,18 @@
         const mode = m.querySelector('input[name=mode]:checked').value;
         m.querySelectorAll('.radio-card').forEach((c) => c.classList.toggle('sel', c.dataset.mode === mode));
         m.querySelector('#pwBox').classList.toggle('hidden', mode !== 'password');
+        m.querySelector('#rememberBox').classList.toggle('hidden', mode !== 'password');
+        m.querySelector('#adminBox').classList.toggle('hidden', mode === 'password');   // при входе по паролю права администратора отдельно не запрашиваются
       };
       m.querySelectorAll('input[name=mode]').forEach((r) => (r.onchange = sync));
       m.querySelector('[data-ok]').onclick = async () => {
         const mode = m.querySelector('input[name=mode]:checked').value;
-        const typed = m.querySelector('#mPw').value; const admin = m.querySelector('#mAdmin').checked;
+        const typed = m.querySelector('#mPw').value; const admin = mode !== 'password' && m.querySelector('#mAdmin').checked;
         let password = typed, usedSaved = false;
         if (mode === 'password') {
           if (!password && saved) { const r = await B.dev.getPw(id); if (r) { password = r.pw; usedSaved = true; } }
           if (!password) return (m.querySelector('#mErr').textContent = 'Введите пароль');
-          if (m.querySelector('#mRemember').checked) await B.dev.savePw(id, password, admin); else if (saved) await B.dev.clearPw(id);
+          if (m.querySelector('#mRemember').checked) await B.dev.savePw(id, password, false); else if (saved) await B.dev.clearPw(id);
           await refreshCfg();
         }
         close(); startOut(id, { mode, password, admin, usedSaved });
@@ -206,7 +247,7 @@
   async function quickConnect(id) {
     const r = await B.dev.getPw(id);
     if (!r) { await refreshCfg(); return connectDialog(id); }
-    startOut(id, { mode: 'password', password: r.pw, admin: r.admin, usedSaved: true });
+    startOut(id, { mode: 'password', password: r.pw, admin: false, usedSaved: true });
   }
   async function startOut(id, opts) {
     S.out = { to: id, usedSaved: !!opts.usedSaved, name: deviceName(id), state: 'calling', info: null, stats: null, error: '', admin: false, adminPending: !!opts.admin, control: true, speakers: true, mic: false };
@@ -597,7 +638,8 @@
       <div class="panel" style="display:flex;flex-direction:column;gap:12px">
         <div class="panel-head"><h2>Журнал подключений</h2><span class="hint">хранится 90 дней</span></div>
         <div style="overflow-x:auto">${c.log.length ? `<table class="log"><tr><th>Кто</th><th>Устройство</th><th>Доступ</th><th>Время</th></tr>${c.log.slice(0, 50).map(logRow).join('')}</table>` : '<div class="empty">Подключений пока не было</div>'}</div>
-      </div>`;
+      </div>
+      <div class="author-foot">Автор: Михаил · © 2026 Bogestv0 · <a href="#" data-action="open-channel" title="Открыть Telegram-канал">t.me/bogestv0</a></div>`;
   }
   function diagText() {
     const c = S.cfg || {};
@@ -653,6 +695,7 @@
     const el = e.target.closest('[data-action]'); if (!el || el.disabled) return;
     const a = el.dataset.action;
     switch (a) {
+      case 'open-channel': e.preventDefault(); return B.app.openChannel();
       case 'copy-id': B.app.copy(S.cfg.id); return toast('ID скопирован');
       case 'add-device': return addDeviceDialog();
       case 'del-device': S.cfg.devices = S.cfg.devices.filter((d) => d.id !== el.dataset.id); await saveDevices(); return renderAll();

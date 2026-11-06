@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('bridge', {
     notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
     setActive: (v) => ipcRenderer.invoke('app:setActive', !!v),
     copy: (t) => ipcRenderer.invoke('app:copy', String(t)),
+    openChannel: () => ipcRenderer.invoke('app:openChannel'),
     readClipboard: () => ipcRenderer.invoke('app:readClipboard'),
     onNavigate: (cb) => on('nav', cb),
     onKick: (cb) => on('app:kick', cb),

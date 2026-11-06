@@ -1,15 +1,16 @@
 {
   "name": "bogestv0-remote",
   "productName": "Bogestv0 REMOTE",
-  "version": "0.1.12",
+  "version": "0.1.14",
   "description": "Bogestv0 REMOTE — удалённый доступ к компьютеру",
   "main": "src/main.js",
-  "author": "Bogestv0",
+  "author": "Михаил (Bogestv0)",
+  "homepage": "https://t.me/bogestv0",
   "license": "AGPL-3.0-or-later",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node test/unit.js && node test/service.js && node test/updater.js",
+    "test": "node test/unit.js && node test/service.js && node test/updater.js && node test/about.js",
     "dist": "electron-builder --win portable nsis --x64 --publish never"
   },
   "dependencies": {

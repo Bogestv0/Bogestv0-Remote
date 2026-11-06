@@ -23,7 +23,7 @@ const INIT = `(() => {
     updater: { state: () => call('updater.state'), check: () => call('updater.check'), update: () => call('updater.update'), onState: (cb) => on('updater:state', cb) },
     dev: { savePw: (id, pw, admin) => call('dev.savePw', id, pw, admin), getPw: (id) => call('dev.getPw', id), clearPw: (id) => call('dev.clearPw', id) },
     log: { add: (e) => call('log.add', e) },
-    app: { chatNotify: (t, b) => call('app.chatNotify', t, b), readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), onNavigate: (cb) => on('nav', cb), onKick: (cb) => on('app:kick', cb) },
+    app: { chatNotify: (t, b) => call('app.chatNotify', t, b), readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), openChannel: () => call('app.openChannel'), onNavigate: (cb) => on('nav', cb), onKick: (cb) => on('app:kick', cb) },
     screen: { source: (id) => call('screen.source', id), list: () => call('screen.list') },
     input: { send: (ev) => { call('input.send', ev); }, release: () => { call('input.release'); } },
     win: { hide: () => call('win.hide'), setFullScreen: (on) => call('win.fs', on), onFullscreen: (cb) => on('win:fs-state', cb) },
@@ -352,7 +352,15 @@ const outEnded = async (v, reason) => { let last = '';
 
   // повышение даже при входе по паролю — всё равно спрашивает
   await sleep(500);
-  await uiConnect(V, H, { mode: 'password', password: PW, admin: true });
+  await V.page.evaluate(() => (location.hash = 'devices'));
+  await until(() => V.page.$(`[data-action=connect][data-id="${H.id}"]:not([disabled])`), 15000, 'кнопка подключения');
+  await V.page.click(`[data-action=connect][data-id="${H.id}"]`);
+  assert(await V.page.locator('#adminBox').isVisible(), 'в режиме «с подтверждением» флажок администратора есть');
+  await V.page.click('.radio-card[data-mode=password]');
+  assert(!(await V.page.locator('#adminBox').isVisible()), 'при входе по паролю флажка «Запросить права администратора» нет');
+  await V.page.fill('#mPw', PW); await V.page.click('.modal [data-ok]');
+  await until(async () => V.S("S.out && S.out.state === 'active'"), 25000, 'вход по паролю');
+  await V.page.click('[data-action=t-admin]');   // администратор при входе по паролю — только кнопкой-щитом в сессии
   await until(async () => (await H.S("S.prompts.length === 1 && S.prompts[0].kind === 'admin'")), 25000, 'admin prompt при входе по паролю');
   assert.equal(H.adminStarts, 1);
   ok('даже при входе по паролю права администратора требуют явного «Разрешить»');
