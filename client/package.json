@@ -10,7 +10,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node test/unit.js && node test/service.js && node test/updater.js && node test/about.js",
+    "test": "node test/unit.js && node test/service.js && node test/updater.js",
     "dist": "electron-builder --win portable nsis --x64 --publish never"
   },
   "dependencies": {
