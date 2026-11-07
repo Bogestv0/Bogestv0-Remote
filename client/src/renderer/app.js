@@ -337,7 +337,8 @@ a Я очень сильно люблю тебя маша I love
     switch (ev.type) {
       case 'state': o.state = ev.state; break;
       case 'track': S.streams[ev.which] = ev.stream; attachStreams(); break;
-      case 'granted': o.state = 'active'; o.info = ev.info; attachStreams(); break;
+      case 'granted': o.state = 'active'; o.info = ev.info; attachStreams(); sess.sendCursorVis(S.localCursor); break;
+      case 'cursor': S.rcur = ev.c; applyCursorShape(); return;
       case 'admin-pending': o.adminPending = true; break;
       case 'admin': o.adminPending = false; o.admin = ev.ok; toast(ev.ok ? 'Права администратора подтверждены' : 'Права администратора не выданы' + (ev.reason && ev.reason !== 'denied' ? ': ' + ev.reason : ''), !ev.ok); break;
       case 'mic': if (!ev.ok) { o.mic = false; toast('Микрофон недоступен: ' + ev.reason, true); } break;
@@ -487,6 +488,12 @@ a Я очень сильно люблю тебя маша I love
     const x = (e.clientX - (r.left + (r.width - w) / 2)) / w, y = (e.clientY - (r.top + (r.height - h) / 2)) / h;
     return x < 0 || y < 0 || x > 1 || y > 1 ? null : { x, y };
   }
+  // Свой курсор над удалённым экраном принимает форму курсора хоста (стрелка, «I», рука, размер…), без задержки видео.
+  function applyCursorShape() {
+    const v = $('remoteVideo') || video; if (!v) return;
+    v.style.cursor = (S.localCursor && S.rcur && S.rcur !== 'default') ? S.rcur : '';
+  }
+  window.applyCursorShape = applyCursorShape;
   const held = new Set(); let moveQueued = null, moveLast = 0, moveTimer = 0;
   const ctl = () => S.out && S.out.state === 'active' && S.out.control;
   // Движение мыши уходит сразу (раньше ждали следующий кадр отрисовки — до 16 мс задержки), но не чаще раза в 8 мс; последнее положение не теряется.
@@ -719,6 +726,7 @@ a Я очень сильно люблю тебя маша I love
       case 't-cursor': {
         S.localCursor = !S.localCursor; try { localStorage.setItem('bg.localCursor', S.localCursor ? '1' : '0'); } catch {}
         const w = $('stageWrap'); if (w) w.classList.toggle('nocursor', !S.localCursor);
+        sess.sendCursorVis(S.localCursor); applyCursorShape();
         el.classList.toggle('on', S.localCursor);
         el.title = S.localCursor ? 'Ваш курсор над удалённым экраном: виден (нажмите, чтобы скрыть)' : 'Ваш курсор над удалённым экраном: скрыт (нажмите, чтобы показать)';
         return;

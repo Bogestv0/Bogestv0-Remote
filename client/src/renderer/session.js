@@ -50,6 +50,27 @@
       return 'a=fmtp:' + m[1] + ' ' + [...kv].map(([k, v]) => (v === undefined ? k : k + '=' + v)).join(';');
     });
   }
+  /** Первые секунды картинка была мутной: WebRTC начинает с ~300 кбит/с и сам снижает разрешение, пока оценка канала растёт.
+   *  Подсказываем стартовый и минимальный битрейт для видео (параметры fmtp; отпечатки DTLS не затрагиваются). */
+  function tuneVideo(sdp) {
+    if (!sdp) return sdp;
+    const hint = ['x-google-start-bitrate=8000', 'x-google-min-bitrate=3000', 'x-google-max-bitrate=20000'];
+    const parts = sdp.split(/(?=^m=)/m);
+    return parts.map((sec) => {
+      if (!/^m=video /.test(sec)) return sec;
+      const nl = sec.includes('\r\n') ? '\r\n' : '\n';
+      const pts = [...sec.matchAll(/^a=rtpmap:(\d+) ([A-Za-z0-9]+)\//gm)].filter((m) => /^(VP8|VP9|H264|AV1|AV1X)$/i.test(m[2])).map((m) => m[1]);
+      for (const pt of pts) {
+        const re = new RegExp('^a=fmtp:' + pt + ' ([^\\r\\n]*)', 'm');
+        if (re.test(sec)) {
+          sec = sec.replace(re, (_l, params) => 'a=fmtp:' + pt + ' ' + [params.replace(/;?\s*x-google-(start|min|max)-bitrate=\d+/g, '').replace(/^;/, ''), ...hint].filter(Boolean).join(';'));
+        } else {
+          sec = sec.replace(new RegExp('^(a=rtpmap:' + pt + ' [^\\r\\n]*)', 'm'), (l) => l + nl + 'a=fmtp:' + pt + ' ' + hint.join(';'));
+        }
+      }
+      return sec;
+    }).join('');
+  }
   async function defaultCapture(bridge, displayId) {
     const src = await bridge.screen.source(displayId);
     if (!src) throw new Error('Нет источника экрана');
@@ -84,6 +105,9 @@
       this.fails = new Map();           // from -> {n, until}
       this.capture = hooks.captureScreen || ((id) => defaultCapture(bridge, id));
       this.captureMic = hooks.captureMic || defaultMic;
+      // Форма курсора хоста уходит зрителю: он рисует свой курсор у себя (без задержки видео), но с правильной формой.
+      this.curShape = 'default';
+      if (bridge.app && bridge.app.onCursorShape) bridge.app.onCursorShape((c) => { this.curShape = c; const s = this.incoming; if (s && s.state === 'active' && s.sendCtl) s.sendCtl({ k: 'cur', c }); });
     }
 
     // ----------------------------------------------------------- сигналы с сервера
@@ -217,6 +241,7 @@
         for (const t of tx) t.direction = 'sendonly';
         [s.vSender, s.sSender, s.mSender] = tx.map((t) => t.sender);
         const answer = await pc.createAnswer();
+        answer.sdp = tuneVideo(answer.sdp);
         await pc.setLocalDescription(answer);
         s.answerSdp = pc.localDescription.sdp;
         this.sendSig(from, { k: 'answer', sid: s.sid, sdp: pc.localDescription.sdp });
@@ -271,6 +296,7 @@
           case 'monitor': return this.hostMonitor(s, String(m.id));
           case 'clip-set': return this.hostClipSet(s, m.text);
           case 'clip-get': return this.hostClipGet(s);
+          case 'cursor-vis': return this.hostCursorVis(s, !!m.hide);
           case 'chat': return this.hostChat(s, m.text);
           case 'bye': return this.endIn('peer-left', false);
           default: return this.hostInput(s, m);
@@ -296,8 +322,13 @@
         await s.vSender.replaceTrack(cap.video);
         try {
           const p = s.vSender.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}];
-          p.encodings[0].maxBitrate = 20e6; p.encodings[0].maxFramerate = 60; p.degradationPreference = 'balanced'; p.encodings[0].networkPriority = 'high'; p.encodings[0].priority = 'high';
+          // первые секунды держим разрешение (иначе пока растёт оценка канала картинка мутная), потом возвращаем «balanced»
+          p.encodings[0].maxBitrate = 20e6; p.encodings[0].maxFramerate = 60; p.encodings[0].scaleResolutionDownBy = 1; p.degradationPreference = 'maintain-resolution'; p.encodings[0].networkPriority = 'high'; p.encodings[0].priority = 'high';
           await s.vSender.setParameters(p);
+          s.qTimer = setTimeout(async () => { try { const q = s.vSender.getParameters(); q.degradationPreference = 'balanced'; await s.vSender.setParameters(q); } catch {} }, 12000);
+          s.diagTimer = setTimeout(async () => {   // в журнал: какой кодек и кодировщик реально работает (нужно при жалобах на задержку и качество)
+            try { const rep = await s.pc.getStats(); rep.forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') ev('host', 'видео:', r.encoderImplementation || '?', (r.frameWidth || '?') + '×' + (r.frameHeight || '?'), Math.round(r.framesPerSecond || 0) + ' к/с', 'ограничение:', r.qualityLimitationReason || 'нет'); }); } catch {}
+          }, 6000);
         } catch {}
         if (cap.audio) { s.spkOn = true; await s.sSender.replaceTrack(cap.audio); }
         s.state = 'active'; s.perms.control = true; s.startedAt = Date.now();
@@ -429,6 +460,15 @@
       this.hooks.log({ who: s.name, id: s.from, kind: 'clip', note: 'чтение буфера обмена' });
       s.sendCtl({ k: 'clip', text: String(text || '').slice(0, 200000) });
     }
+    /** Зритель рисует курсор сам: пробуем убрать курсор из видео (меньше «двойного» курсора). Если захват это не поддерживает, всё остаётся как было. */
+    async hostCursorVis(s, hide) {
+      try {
+        const v = s.cap && s.cap.video; if (!v) return;
+        await v.applyConstraints({ cursor: hide ? 'never' : 'always' });
+        ev('host', 'курсор в видео:', hide ? 'скрыт' : 'виден', '(настройка захвата: ' + ((v.getSettings && v.getSettings().cursor) || 'не поддерживается') + ')');
+      } catch (e) { ev('host', 'курсор в видео скрыть не удалось:', e && (e.name || e.message)); }
+      if (s.sendCtl && this.curShape) s.sendCtl({ k: 'cur', c: this.curShape });
+    }
     hostInput(s, raw) {
       if (s.state !== 'active' || !s.perms.control) return;
       let m = raw; if (typeof raw === 'string') { try { m = JSON.parse(raw); } catch { return; } }
@@ -495,7 +535,7 @@
         pc.onconnectionstatechange = () => this.onConnState(s, () => this.endOut('lost'));
         this.viewerCtl(s);
         const offer = await pc.createOffer();
-        offer.sdp = tuneOpus(offer.sdp);
+        offer.sdp = tuneVideo(tuneOpus(offer.sdp));
         await pc.setLocalDescription(offer);
         s.offerSdp = pc.localDescription.sdp;
         this.sendSig(id, { k: 'offer', sid: s.sid, sdp: pc.localDescription.sdp, meta: { name: this.hooks.getCfg().name, mode: s.mode, admin: s.wantAdmin } });
@@ -544,6 +584,7 @@
           case 'admin': s.perms.admin = !!m.ok; return this.hooks.onOut({ type: 'admin', to: s.to, ok: !!m.ok, reason: m.reason || '' });
           case 'monitor': return this.hooks.onOut({ type: 'monitor', to: s.to, ok: !!m.ok, id: m.id, w: m.w, h: m.h, reason: m.reason || '' });
           case 'clip': return this.hooks.onOut({ type: 'clip', to: s.to, text: String(m.text || '') });
+          case 'cur': return ['default','text','wait','crosshair','nwse-resize','nesw-resize','ew-resize','ns-resize','move','not-allowed','pointer','progress','help','none'].includes(m.c) ? this.hooks.onOut({ type: 'cursor', to: s.to, c: m.c }) : undefined;
           case 'clip-ack': return this.hooks.onOut({ type: 'clip-ack', to: s.to, ok: !!m.ok });
           case 'chat': if (typeof m.text === 'string' && m.text.trim() && m.text.length <= 2000) this.hooks.onOut({ type: 'chat', to: s.to, text: m.text }); return;
           case 'spk-src': return this.hooks.onOut({ type: 'spk-src', to: s.to, ok: !!m.ok, id: m.id, reason: m.reason || '' });
@@ -576,6 +617,7 @@
       const s = this.outgoing; if (!s || s.state !== 'active') return;
       if (ev.k === 'mm' && s.mv.readyState === 'open') s.mv.send(JSON.stringify(ev)); else s.send(ev);
     }
+    sendCursorVis(hide) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'cursor-vis', hide: !!hide }); }
     sendChat(text) { const s = this.outgoing; if (!s || s.state !== 'active') return false; s.send({ k: 'chat', text: String(text).slice(0, 2000) }); return true; }
     sendMonitor(id) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'monitor', id: String(id) }); }
     async clipSend() { const s = this.outgoing; if (!s || s.state !== 'active') return; const text = await this.bridge.app.readClipboard(); if (!text) return this.hooks.onOut({ type: 'clip-empty', to: s.to }); s.send({ k: 'clip-set', text }); }
@@ -591,7 +633,7 @@
       this.outgoing = null;
       ev('viewer', 'сессия завершена:', reason);
       this.dumpStats(s, 'конец:' + reason);
-      clearTimeout(s.timeout); clearTimeout(s.discTimer); clearInterval(s.statsTimer); clearTimeout(s.dumpTimer);
+      clearTimeout(s.timeout); clearTimeout(s.discTimer); clearInterval(s.statsTimer); clearTimeout(s.dumpTimer); clearTimeout(s.qTimer); clearTimeout(s.diagTimer);
       if (tellPeer) { if (s.state === 'active' || s.state === 'calling') { try { s.send && s.send({ k: 'bye', reason }); } catch {} } }
       const was = s.state; s.state = 'ended';
       setTimeout(() => { try { s.pc && s.pc.close(); } catch {} }, 200);
@@ -601,5 +643,6 @@
   RemoteSession.proof = proof;
   RemoteSession.fpOf = fpOf;
   RemoteSession.tuneOpus = tuneOpus;
+  RemoteSession.tuneVideo = tuneVideo;
   window.RemoteSession = RemoteSession;
 })();

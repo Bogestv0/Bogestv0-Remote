@@ -88,8 +88,17 @@ function createTray() {
   tray.setContextMenu(trayMenu());
   tray.on('double-click', () => showWindow());
 }
+let shapeTimer = 0, lastShape = '';
+function watchCursorShape(on) {
+  clearInterval(shapeTimer); shapeTimer = 0; lastShape = '';
+  if (!on || !injector || !injector.available) return;
+  shapeTimer = setInterval(() => {
+    const sh = injector.cursorShape();
+    if (sh !== lastShape) { lastShape = sh; toRenderer('cursor:shape', sh); }
+  }, 30);
+}
 function setTrayActive(active) {
-  sessionActive = !!active;
+  sessionActive = !!active; watchCursorShape(sessionActive);
   if (!tray) return;
   tray.setContextMenu(trayMenu());
   tray.setImage(nativeImage.createFromPath(trayIcon(active)));

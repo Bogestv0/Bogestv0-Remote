@@ -52,6 +52,15 @@ function createInjector(log = () => {}) {
       const INPUT = koffi.struct('INPUT', { type: 'uint32', u: INPUT_U });
       const SendInput = user32.func('uint32 __stdcall SendInput(uint32 cInputs, INPUT *pInputs, int cbSize)');
       const SetCursorPos = user32.func('bool __stdcall SetCursorPos(int x, int y)');
+      // Форма курсора хоста: зрителю отдаём название (стрелка, «I», рука, размер…), он рисует свой курсор без задержки видео.
+      const POINT = koffi.struct('POINT', { x: 'long', y: 'long' });
+      const CURSORINFO = koffi.struct('CURSORINFO', { cbSize: 'uint32', flags: 'uint32', hCursor: 'void *', ptScreenPos: POINT });
+      const GetCursorInfo = user32.func('bool __stdcall GetCursorInfo(_Inout_ CURSORINFO *pci)');
+      const LoadCursorW = user32.func('void * __stdcall LoadCursorW(void *hInstance, uintptr_t lpCursorName)');
+      const SHAPES = { 32512: 'default', 32513: 'text', 32514: 'wait', 32515: 'crosshair', 32516: 'default', 32642: 'nwse-resize', 32643: 'nesw-resize', 32644: 'ew-resize', 32645: 'ns-resize', 32646: 'move', 32648: 'not-allowed', 32649: 'pointer', 32650: 'progress', 32651: 'help' };
+      const shapeByHandle = new Map();
+      for (const id of Object.keys(SHAPES)) { try { shapeByHandle.set(String(koffi.address(LoadCursorW(null, Number(id)))), SHAPES[id]); } catch {} }
+      const curSize = koffi.sizeof(CURSORINFO);
       const size = koffi.sizeof(INPUT);
       api = {
         mouse(flags, data = 0) {
@@ -62,15 +71,22 @@ function createInjector(log = () => {}) {
           SendInput(1, [{ type: 1, u: { ki: { wVk: 0, wScan: sc, dwFlags: flags, time: 0, dwExtraInfo: 0 } } }], size);
         },
         move(x, y) { SetCursorPos(Math.round(x), Math.round(y)); },
+        shape() {
+          const ci = { cbSize: curSize, flags: 0, hCursor: null, ptScreenPos: { x: 0, y: 0 } };
+          if (!GetCursorInfo(ci)) return 'default';
+          if (!(ci.flags & 1)) return 'none';   // курсор скрыт (например, в игре)
+          return ci.hCursor ? (shapeByHandle.get(String(koffi.address(ci.hCursor))) || 'default') : 'default';
+        },
       };
     } catch (e) { log('input: koffi недоступен —', e.message); }
   }
 
   const noop = () => {};
-  const a = api || { mouse: noop, key: noop, move: noop };
+  const a = api || { mouse: noop, key: noop, move: noop, shape: () => 'default' };
   return {
     available: !!api,
     move(px, py) { a.move(px, py); },
+    cursorShape() { try { return a.shape(); } catch { return 'default'; } },
     button(btn, down) {
       const f = MOUSE[btn]; if (!f) return;
       a.mouse(down ? f[0] : f[1]);

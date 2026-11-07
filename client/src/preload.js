@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('bridge', {
     readClipboard: () => ipcRenderer.invoke('app:readClipboard'),
     onNavigate: (cb) => on('nav', cb),
     onKick: (cb) => on('app:kick', cb),
+    onCursorShape: (cb) => on('cursor:shape', cb),
     ready: () => ipcRenderer.invoke('app:ready'),
   },
   win: { hide: () => ipcRenderer.send('win:hide'), setFullScreen: (on) => ipcRenderer.send('win:fs', !!on), onFullscreen: (cb) => on('win:fs-state', cb) },

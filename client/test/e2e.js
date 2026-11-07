@@ -23,7 +23,7 @@ const INIT = `(() => {
     updater: { state: () => call('updater.state'), check: () => call('updater.check'), update: () => call('updater.update'), onState: (cb) => on('updater:state', cb) },
     dev: { savePw: (id, pw, admin) => call('dev.savePw', id, pw, admin), getPw: (id) => call('dev.getPw', id), clearPw: (id) => call('dev.clearPw', id) },
     log: { add: (e) => call('log.add', e) },
-    app: { chatNotify: (t, b) => call('app.chatNotify', t, b), readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), openChannel: () => call('app.openChannel'), onNavigate: (cb) => on('nav', cb), onKick: (cb) => on('app:kick', cb) },
+    app: { chatNotify: (t, b) => call('app.chatNotify', t, b), readClipboard: () => call('app.readClipboard'), ready: () => call('app.ready'), attention: (t, b) => call('app.attention', t, b), notify: (t, b) => call('app.notify', t, b), setActive: (v) => call('app.setActive', v), copy: (t) => call('app.copy', t), openChannel: () => call('app.openChannel'), onNavigate: (cb) => on('nav', cb), onKick: (cb) => on('app:kick', cb), onCursorShape: (cb) => on('cursor:shape', cb) },
     screen: { source: (id) => call('screen.source', id), list: () => call('screen.list') },
     input: { send: (ev) => { call('input.send', ev); }, release: () => { call('input.release'); } },
     win: { hide: () => call('win.hide'), setFullScreen: (on) => call('win.fs', on), onFullscreen: (cb) => on('win:fs-state', cb) },
@@ -243,6 +243,13 @@ const outEnded = async (v, reason) => { let last = '';
   await V.page.evaluate(() => (location.hash = 'session'));
   ok('пункт 12: источник звука выбирается (системный / любое устройство ввода хоста), звук идёт с выбранного, смена — в журнале хоста');
   ok('пункт 12: звук идёт (байты растут), Opus стерео 128 кбит/с запрошен, ползунок громкости меняет громкость');
+
+  // форма курсора хоста доезжает до зрителя и применяется к его курсору над экраном; при выключенном «своём курсоре» не применяется
+  await H.page.evaluate(() => window.__emit('cursor:shape', 'text'));
+  await until(() => V.page.evaluate(() => document.querySelector('video').style.cursor === 'text'), 6000, 'форма курсора «text» дошла до зрителя');
+  await H.page.evaluate(() => window.__emit('cursor:shape', 'default'));
+  await until(() => V.page.evaluate(() => document.querySelector('video').style.cursor === ''), 6000, 'форма «default» сбрасывает курсор');
+  ok('курсор: форма с хоста (текст/стрелка) применяется к курсору зрителя без задержки видео');
 
   // пункт 7: чат в обе стороны
   await V.page.click('[data-action=t-chat]');
