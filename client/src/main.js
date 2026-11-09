@@ -35,7 +35,7 @@ app.on('second-instance', () => showWindow(null, true));
 // ---------------------------------------------------------------- окно / трей
 function createWindow() {
   win = new BrowserWindow({
-    width: 1280, height: 860, minWidth: 900, minHeight: 600,
+    width: 1280, height: 860, minWidth: 680, minHeight: 500,
     show: !HIDDEN, autoHideMenuBar: true, backgroundColor: '#eef0f6',
     title: 'Bogestv0 REMOTE', icon: R('logo.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },

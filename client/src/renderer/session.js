@@ -54,7 +54,7 @@
    *  Подсказываем стартовый и минимальный битрейт для видео (параметры fmtp; отпечатки DTLS не затрагиваются). */
   function tuneVideo(sdp) {
     if (!sdp) return sdp;
-    const hint = ['x-google-start-bitrate=8000', 'x-google-min-bitrate=3000', 'x-google-max-bitrate=20000'];
+    const hint = ['x-google-start-bitrate=10000', 'x-google-min-bitrate=3000', 'x-google-max-bitrate=30000'];
     const parts = sdp.split(/(?=^m=)/m);
     return parts.map((sec) => {
       if (!/^m=video /.test(sec)) return sec;
@@ -310,6 +310,7 @@
           case 'monitor': return this.hostMonitor(s, String(m.id));
           case 'clip-set': return this.hostClipSet(s, m.text);
           case 'clip-get': return this.hostClipGet(s);
+          case 'quality': return this.hostQuality(s, m.m);
           case 'cursor-vis': return this.hostCursorVis(s, !!m.hide);
           case 'chat': return this.hostChat(s, m.text);
           case 'bye': return this.endIn('peer-left', false);
@@ -337,9 +338,9 @@
         try {
           const p = s.vSender.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}];
           // первые секунды держим разрешение (иначе пока растёт оценка канала картинка мутная), потом возвращаем «balanced»
-          p.encodings[0].maxBitrate = 20e6; p.encodings[0].maxFramerate = 60; p.encodings[0].scaleResolutionDownBy = 1; p.degradationPreference = 'maintain-resolution'; p.encodings[0].networkPriority = 'high'; p.encodings[0].priority = 'high';
+          p.encodings[0].maxBitrate = 30e6; p.encodings[0].maxFramerate = 60; p.encodings[0].scaleResolutionDownBy = 1; p.degradationPreference = 'maintain-resolution'; p.encodings[0].networkPriority = 'high'; p.encodings[0].priority = 'high';
           await s.vSender.setParameters(p);
-          s.qTimer = setTimeout(async () => { try { const q = s.vSender.getParameters(); q.degradationPreference = 'balanced'; await s.vSender.setParameters(q); } catch {} }, 12000);
+          s.qTimer = setTimeout(async () => { try { const q = s.vSender.getParameters(); q.degradationPreference = s.quality === 'sharp' ? 'maintain-resolution' : 'balanced'; await s.vSender.setParameters(q); } catch {} }, 12000);
           s.diagTimer = setTimeout(async () => {   // в журнал: какой кодек и кодировщик реально работает (нужно при жалобах на задержку и качество)
             try { const rep = await s.pc.getStats(); rep.forEach((r) => { if (r.type === 'outbound-rtp' && r.kind === 'video') ev('host', 'видео:', r.encoderImplementation || '?', (r.frameWidth || '?') + '×' + (r.frameHeight || '?'), Math.round(r.framesPerSecond || 0) + ' к/с', 'ограничение:', r.qualityLimitationReason || 'нет'); }); } catch {}
           }, 6000);
@@ -484,6 +485,16 @@
         ev('host', 'курсор в видео:', hide ? 'скрыт' : 'виден', '(настройка захвата: ' + ((v.getSettings && v.getSettings().cursor) || 'не поддерживается') + ')');
       } catch (e) { ev('host', 'курсор в видео скрыть не удалось:', e && (e.name || e.message)); }
       if (s.sendCtl && this.curShape) s.sendCtl({ k: 'cur', c: this.curShape });
+    }
+    /** Режим картинки от зрителя: «smooth» — больше кадров, «sharp» — чётче (меньше кадров, разрешение не снижается). */
+    async hostQuality(s, mode) {
+      const sharp = mode === 'sharp'; s.quality = sharp ? 'sharp' : 'smooth';
+      try { if (s.cap && s.cap.video) s.cap.video.contentHint = sharp ? 'detail' : 'motion'; } catch {}
+      try {
+        const p = s.vSender.getParameters(); p.encodings = p.encodings && p.encodings.length ? p.encodings : [{}];
+        p.encodings[0].maxFramerate = sharp ? 30 : 60; p.degradationPreference = sharp ? 'maintain-resolution' : 'balanced';
+        await s.vSender.setParameters(p); ev('host', 'режим картинки:', sharp ? 'чёткость' : 'плавность');
+      } catch (e) { ev('host', 'режим картинки: не удалось', e && (e.name || e.message)); }
     }
     startCursorFeed(s) {
       if (!s.cap || !s.cap.cursorHidden || !this.bridge.app.cursorTrack) return;
@@ -653,6 +664,7 @@
       const s = this.outgoing; if (!s || s.state !== 'active') return;
       if (ev.k === 'mm' && s.mv.readyState === 'open') s.mv.send(JSON.stringify(ev)); else s.send(ev);
     }
+    sendQuality(m) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'quality', m: m === 'sharp' ? 'sharp' : 'smooth' }); }
     sendCursorVis(hide) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'cursor-vis', hide: !!hide }); }
     sendChat(text) { const s = this.outgoing; if (!s || s.state !== 'active') return false; s.send({ k: 'chat', text: String(text).slice(0, 2000) }); return true; }
     sendMonitor(id) { const s = this.outgoing; if (s && s.state === 'active') s.send({ k: 'monitor', id: String(id) }); }

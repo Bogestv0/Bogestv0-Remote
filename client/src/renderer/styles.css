@@ -181,8 +181,6 @@ table.log tr:last-child td{border-bottom:none}
 @media (max-width: 720px){
   .topbar{gap:10px}
   .brand-sub{display:none}
-  .tabs{order:3;width:100%;overflow-x:auto}
-  .status-chip{display:none}
   .grid{grid-template-columns:1fr}
   .screen-fake{height:220px}
 }
@@ -364,7 +362,29 @@ table.log tr:not(:first-child):hover td{background:var(--surface-2)}
 
 /* верхняя панель не ломается на узком окне */
 @media (max-width:1240px){#accName{display:none}.account{padding:5px}.dl-chip#verChip .ver-os{display:none}}
-@media (min-width:721px){.topbar{flex-wrap:nowrap}.tabs{overflow-x:auto;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}.tab{white-space:nowrap}}
+/* ---- шапка и окно любого размера ---- */
+.status-chip,.dl-chip,.account,.tab,.brand{white-space:nowrap;flex:0 0 auto}
+.topbar-right{flex:0 0 auto}
+.tabs{scrollbar-width:none;overflow-x:auto;min-width:0}.tabs::-webkit-scrollbar{display:none}
+@media (min-width:961px){.topbar{flex-wrap:nowrap}.tabs{flex:0 1 auto}}
+@media (max-width:1100px){.brand>div:last-child{display:none}.tab{padding:0 12px}.topbar{gap:12px}}
+@media (max-width:960px){
+  .topbar{flex-wrap:wrap;gap:8px 10px;padding-top:10px;padding-bottom:10px}
+  .tabs{order:3;width:100%;flex:1 0 100%}
+  .tab{flex:1 0 auto;justify-content:center}
+  .status-chip{display:flex}
+}
+@media (max-width:640px){
+  .wrap{padding-left:12px;padding-right:12px}
+  .status-chip{padding:5px 9px}
+  #statusText{max-width:150px;overflow:hidden;text-overflow:ellipsis}
+}
+/* панель сессии: кнопки переносятся, а не вылезают за край */
+.toolbar{flex-wrap:wrap}
+.tool-meta{flex-wrap:wrap}
+.click-ring{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;border:2.5px solid #4da3ff;pointer-events:none;z-index:6;animation:ring .6s ease-out forwards}
+.click-ring.r{border-color:#ffb020}.click-ring.m{border-color:#3ddc84}
+@keyframes ring{from{transform:scale(.4);opacity:1}to{transform:scale(1.9);opacity:0}}
 .srcrow{display:flex;gap:9px;align-items:center;margin-top:9px;flex-wrap:wrap}
 .srcrow .select{flex:1 1 260px;min-width:0;max-width:420px}
 

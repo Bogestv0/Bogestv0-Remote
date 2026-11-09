@@ -6,7 +6,7 @@ const assert = require('assert');
 (async () => {
   const b = await chromium.launch(); const page = await b.newPage({ viewport: { width: 1100, height: 800 } });
   const calls = []; await page.exposeFunction('__bridge', (m) => { calls.push(m); return m === 'cfg.get' ? CFG : m === 'sig.state' ? { connected: true, id: '123456789' } : m === 'updater.state' ? { status: 'idle' } : { ok: true }; });
-  const CFG = { id: '123456789', name: 'T', hostname: 'T', version: '0.1.18', platform: 'win32', savedDevices: {}, autostartState: { supported: true, set: true, willLaunch: true }, customServer: false, custom: { host: '', port: 8443, fingerprint: '' }, unattended: false, hasPassword: false, allowedIds: [], autostart: false, minimizeToTray: true, devices: [], log: [], injector: true, sig: { connected: true, id: '123456789', error: '' } };
+  const CFG = { id: '123456789', name: 'T', hostname: 'T', version: '0.1.19', platform: 'win32', savedDevices: {}, autostartState: { supported: true, set: true, willLaunch: true }, customServer: false, custom: { host: '', port: 8443, fingerprint: '' }, unattended: false, hasPassword: false, allowedIds: [], autostart: false, minimizeToTray: true, devices: [], log: [], injector: true, sig: { connected: true, id: '123456789', error: '' } };
   await page.addInitScript(() => {
     const mk = (ns) => new Proxy({}, { get: (_t, k) => (k.startsWith('on') ? () => () => {} : (...a) => window.__bridge(ns + '.' + String(k), a)) });
     window.bridge = new Proxy({}, { get: (_t, ns) => mk(String(ns)) });

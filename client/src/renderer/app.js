@@ -22,6 +22,8 @@
     clipUp: I('<path d="M12 21V9M7 14l5-5 5 5M5 3h14"/>'),
     chat: I('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
     cursor: I('<path d="M5 3l14 7-6 2-2 6L5 3z"/>'),
+    target: I('<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/>'),
+    gauge: I('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>'),
     clipDown: I('<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>'),
   };
   const REASONS = {
@@ -50,6 +52,8 @@
     vol: (() => { try { const v = JSON.parse(localStorage.getItem('bg.vol') || '{}'); return { spk: Math.min(1, Math.max(0, v.spk ?? 1)), mic: Math.min(1, Math.max(0, v.mic ?? 1)) }; } catch { return { spk: 1, mic: 1 }; } })(),
     chat: { out: [], in: [] }, chatDraft: { out: '', in: '' }, chatUnread: 0, presenceAt: 0, refreshing: false, customForm: false,
     chatOpen: (() => { try { return localStorage.getItem('bg.chatOpen') === '1'; } catch { return false; } })(),
+    hostCursor: (() => { try { return localStorage.getItem('bg.hostCursor') !== '0'; } catch { return true; } })(),   // показывать курсор удалённого компьютера и места кликов
+    quality: (() => { try { return localStorage.getItem('bg.quality') === 'sharp' ? 'sharp' : 'smooth'; } catch { return 'smooth'; } })(),   // smooth — плавность, sharp — чёткость
     localCursor: (() => { try { return localStorage.getItem('bg.localCursor') !== '0'; } catch { return true; } })(),   // показывать свой курсор над удалённым экраном
   };
   const hooks = {
@@ -337,7 +341,7 @@ a Я очень сильно люблю тебя маша I love
     switch (ev.type) {
       case 'state': o.state = ev.state; break;
       case 'track': S.streams[ev.which] = ev.stream; attachStreams(); break;
-      case 'granted': o.state = 'active'; o.info = ev.info; attachStreams(); sess.sendCursorVis(S.localCursor); break;
+      case 'granted': o.state = 'active'; o.info = ev.info; attachStreams(); sess.sendCursorVis(S.localCursor); if (S.quality === 'sharp') sess.sendQuality('sharp'); break;
       case 'cursor': S.rcur = ev.c; applyCursorShape(); return;
       case 'cursorimg': hostCurImgs.set(ev.img.id, ev.img); if (hostCurImgs.size > 80) hostCurImgs.delete(hostCurImgs.keys().next().value); if (hostCurPos && hostCurPos.id === ev.img.id) placeHostCursor(); return;
       case 'cursorpos': hostCurPos = ev.p; placeHostCursor(); return;
@@ -453,6 +457,8 @@ a Я очень сильно люблю тебя маша I love
           <button class="tool-btn ${o.control ? 'on' : ''}" data-action="t-control" title="${o.control ? 'Управление включено' : 'Только просмотр'}">${ICON.ptr}</button>
           <button class="tool-btn ${S.chatOpen ? 'on' : ''}" data-action="t-chat" title="Чат с этим устройством">${ICON.chat}<span class="tool-badge ${S.chatUnread ? '' : 'hidden'}">${S.chatUnread > 9 ? '9+' : S.chatUnread}</span></button>
           <button class="tool-btn ${S.localCursor ? 'on' : ''}" data-action="t-cursor" title="${S.localCursor ? 'Ваш курсор над удалённым экраном: виден (нажмите, чтобы скрыть)' : 'Ваш курсор над удалённым экраном: скрыт (нажмите, чтобы показать)'}">${ICON.cursor}</button>
+          <button class="tool-btn ${S.hostCursor ? 'on' : ''}" data-action="t-hostcur" title="${S.hostCursor ? 'Курсор удалённого компьютера и места кликов: показаны (нажмите, чтобы скрыть)' : 'Курсор удалённого компьютера и места кликов: скрыты (нажмите, чтобы показать)'}">${ICON.target}</button>
+          <button class="tool-btn ${S.quality === 'sharp' ? 'on' : ''}" data-action="t-quality" title="${S.quality === 'sharp' ? 'Режим: чёткость (выше качество, меньше кадров). Нажмите для плавности' : 'Режим: плавность (больше кадров). Нажмите для чёткости'}">${ICON.gauge}</button>
           <button class="tool-btn ${S.fs ? 'on' : ''}" data-action="t-full" title="${S.fs ? 'Выйти из полноэкранного режима' : 'Во весь экран'}">${ICON.full}</button>
           ${(o.info && o.info.monitors && o.info.monitors.length > 1) ? `<select class="select" id="monSel" style="height:34px;border-radius:9px;background:rgba(255,255,255,.08);color:#fff;border:0;max-width:210px" title="Какой монитор показывать">${o.info.monitors.map((m) => `<option value="${esc(m.id)}" ${m.id === o.info.monitor ? 'selected' : ''} style="color:#000">${esc(m.label)}</option>`).join('')}</select>` : ''}
           <button class="tool-btn" data-action="t-clip-send" title="Отправить текст из вашего буфера обмена на удалённое устройство" ${connecting ? 'disabled' : ''}>${ICON.clipUp}</button>
@@ -507,7 +513,7 @@ a Я очень сильно люблю тебя маша I love
   function placeHostCursor() {
     const o = S.out, p = hostCurPos, wrap = hostCur.parentNode;
     const img = p && hostCurImgs.get(p.id);
-    if (!o || o.state !== 'active' || !o.info || !o.info.cursorOverlay || !p || !p.v || !img || !wrap || !video.videoWidth) { hostCur.style.display = 'none'; return; }
+    if (!S.hostCursor || !o || o.state !== 'active' || !o.info || !o.info.cursorOverlay || !p || !p.v || !img || !wrap || !video.videoWidth) { hostCur.style.display = 'none'; return; }
     const r = video.getBoundingClientRect(), wr = wrap.getBoundingClientRect(); const vw = video.videoWidth, vh = video.videoHeight;
     const k = Math.min(r.width / vw, r.height / vh); const w = vw * k, h = vh * k;
     const ox = r.left - wr.left + (r.width - w) / 2, oy = r.top - wr.top + (r.height - h) / 2;
@@ -527,7 +533,15 @@ a Я очень сильно люблю тебя маша I love
     const wait = 8 - (performance.now() - moveLast);
     if (wait <= 0) { clearTimeout(moveTimer); flushMove(); } else if (!moveTimer) moveTimer = setTimeout(flushMove, wait);
   });
-  video.addEventListener('mousedown', (e) => { video.focus(); if (!ctl()) return; const p = norm(e); if (p) { e.preventDefault(); sess.sendInput({ k: 'md', b: e.button, ...p }); } });
+  // Кольцо в месте нажатия: видно, куда пришёлся клик на удалённом экране (кнопка «курсор» на панели)
+  function clickRing(e, b) {
+    const wrap = video.parentNode; if (!S.hostCursor || !wrap) return;
+    const wr = wrap.getBoundingClientRect(); const d = document.createElement('div');
+    d.className = 'click-ring' + (b === 2 ? ' r' : b === 1 ? ' m' : '');
+    d.style.left = (e.clientX - wr.left) + 'px'; d.style.top = (e.clientY - wr.top) + 'px';
+    wrap.appendChild(d); setTimeout(() => d.remove(), 600);
+  }
+  video.addEventListener('mousedown', (e) => { video.focus(); if (!ctl()) return; const p = norm(e); if (p) { e.preventDefault(); clickRing(e, e.button); sess.sendInput({ k: 'md', b: e.button, ...p }); } });
   video.addEventListener('mouseup', (e) => { if (!ctl()) return; const p = norm(e) || { x: 0.5, y: 0.5 }; e.preventDefault(); sess.sendInput({ k: 'mu', b: e.button, ...p }); });
   video.addEventListener('wheel', (e) => { if (!ctl()) return; e.preventDefault(); sess.sendInput({ k: 'wh', dx: e.deltaX, dy: e.deltaY }); }, { passive: false });
   video.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -658,7 +672,7 @@ a Я очень сильно люблю тебя маша I love
       </div>
       <div class="panel" style="display:flex;flex-direction:column;gap:2px">
         <div class="panel-head" style="margin-bottom:10px"><h2>Соединение</h2></div>
-        <div class="setting-row"><div><div class="setting-label">Соединять только через сервер</div><div class="setting-help">Весь трафик идёт через ваш сервер (TURN): надёжнее, но задержка больше. Когда выключено (по умолчанию), компьютеры соединяются напрямую, а через сервер — только если прямое соединение не вышло. Меняйте на обоих устройствах.</div></div>${switchHtml(c.relayOnly === true, 'sec-relay')}</div>
+        <div class="setting-row"><div><div class="setting-label">Соединять только через сервер</div><div class="setting-help">Весь трафик идёт через сервер Bogestv0 (или через ваш собственный сервер, если он указан): надёжнее, но задержка больше. Когда выключено (по умолчанию), компьютеры соединяются напрямую, а через сервер — только если прямое соединение не вышло. Меняйте на обоих устройствах.</div></div>${switchHtml(c.relayOnly === true, 'sec-relay')}</div>
       </div>
       <div class="panel" style="display:flex;flex-direction:column;gap:12px">
         <div class="panel-head"><h2>Диагностика соединения</h2><span class="hint">если подключение не получается — нажмите «Скопировать» и пришлите текст</span></div>
@@ -669,7 +683,7 @@ a Я очень сильно люблю тебя маша I love
         <div class="panel-head"><h2>Журнал подключений</h2><span class="hint">хранится 90 дней</span></div>
         <div style="overflow-x:auto">${c.log.length ? `<table class="log"><tr><th>Кто</th><th>Устройство</th><th>Доступ</th><th>Время</th></tr>${c.log.slice(0, 50).map(logRow).join('')}</table>` : '<div class="empty">Подключений пока не было</div>'}</div>
       </div>
-      <div class="author-foot">Автор: Михаил · © 2026 Bogestv0 · <a href="#" data-action="open-channel" title="Открыть Telegram-канал">t.me/bogestv0</a></div>`;
+      <div class="author-foot">Автор: Bogestv0 · © 2026 Bogestv0 · <a href="#" data-action="open-channel" title="Открыть Telegram-канал">t.me/bogestv0</a></div>`;
   }
   function diagText() {
     const c = S.cfg || {};
@@ -752,6 +766,21 @@ a Я очень сильно люблю тебя маша I love
         sess.sendCursorVis(S.localCursor); applyCursorShape();
         el.classList.toggle('on', S.localCursor);
         el.title = S.localCursor ? 'Ваш курсор над удалённым экраном: виден (нажмите, чтобы скрыть)' : 'Ваш курсор над удалённым экраном: скрыт (нажмите, чтобы показать)';
+        return;
+      }
+      case 't-hostcur': {
+        S.hostCursor = !S.hostCursor; try { localStorage.setItem('bg.hostCursor', S.hostCursor ? '1' : '0'); } catch {}
+        el.classList.toggle('on', S.hostCursor);
+        el.title = S.hostCursor ? 'Курсор удалённого компьютера и места кликов: показаны (нажмите, чтобы скрыть)' : 'Курсор удалённого компьютера и места кликов: скрыты (нажмите, чтобы показать)';
+        placeHostCursor(); toast(S.hostCursor ? 'Курсор удалённого компьютера показан' : 'Курсор удалённого компьютера скрыт');
+        return;
+      }
+      case 't-quality': {
+        S.quality = S.quality === 'sharp' ? 'smooth' : 'sharp'; try { localStorage.setItem('bg.quality', S.quality); } catch {}
+        sess.sendQuality(S.quality);
+        el.classList.toggle('on', S.quality === 'sharp');
+        el.title = S.quality === 'sharp' ? 'Режим: чёткость (выше качество, меньше кадров). Нажмите для плавности' : 'Режим: плавность (больше кадров). Нажмите для чёткости';
+        toast(S.quality === 'sharp' ? 'Режим: чёткость' : 'Режим: плавность');
         return;
       }
       case 't-full': return setFullscreen(!S.fs);
