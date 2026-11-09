@@ -76,12 +76,22 @@
     if (!src) throw new Error('Нет источника экрана');
     const base = { chromeMediaSource: 'desktop', chromeMediaSourceId: src.id };
     const video = { mandatory: { ...base, maxFrameRate: 60, maxWidth: src.width, maxHeight: src.height } };
-    let stream;
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { mandatory: base }, video }); }
-    catch (e) { ev('capture', 'системный звук недоступен, передаём только видео:', e && (e.name || e.message)); stream = await navigator.mediaDevices.getUserMedia({ audio: false, video }); }
+    let stream = null, cursorHidden = false;
+    // 1) getDisplayMedia с cursor:'never': курсор хоста не попадает в видео (его положение и картинка идут отдельно и рисуются у зрителя без задержки кадров)
+    try {
+      const gd = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'never', frameRate: { ideal: 60, max: 60 }, width: { ideal: src.width }, height: { ideal: src.height } }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      const cs = (gd.getVideoTracks()[0].getSettings && gd.getVideoTracks()[0].getSettings().cursor) || '';
+      if (cs === 'never') { stream = gd; cursorHidden = true; ev('capture', 'захват без курсора в видео (getDisplayMedia)'); }
+      else { gd.getTracks().forEach((t) => t.stop()); ev('capture', 'getDisplayMedia не скрыл курсор (cursor=' + (cs || 'нет') + '), используем обычный захват'); }
+    } catch (e) { ev('capture', 'getDisplayMedia недоступен:', e && (e.name || e.message)); }
+    // 2) запасной путь: прежний захват (курсор хоста остаётся в видео)
+    if (!stream) {
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: { mandatory: base }, video }); }
+      catch (e) { ev('capture', 'системный звук недоступен, передаём только видео:', e && (e.name || e.message)); stream = await navigator.mediaDevices.getUserMedia({ audio: false, video }); }
+    }
     const v = stream.getVideoTracks()[0];
     try { v.contentHint = 'motion'; } catch {}   // 'motion' = плавность (раньше 'detail' — резкость текста, но ниже частота кадров)
-    return { video: v, audio: stream.getAudioTracks()[0] || null, width: src.width, height: src.height, displayId: src.displayId };
+    return { video: v, audio: stream.getAudioTracks()[0] || null, width: src.width, height: src.height, displayId: src.displayId, cursorHidden };
   }
   async function defaultMic(deviceId) {
     const s = await navigator.mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true, video: false });
@@ -107,6 +117,10 @@
       this.captureMic = hooks.captureMic || defaultMic;
       // Форма курсора хоста уходит зрителю: он рисует свой курсор у себя (без задержки видео), но с правильной формой.
       this.curShape = 'default';
+      // Курсор хоста отдельно от видео: картинка (ctl, надёжно, один раз) + положение (mv, без повторов, ~60 раз/с)
+      this.curImgs = new Map();
+      if (bridge.app && bridge.app.onCursorImg) bridge.app.onCursorImg((im) => { this.curImgs.set(im.id, im); const s = this.incoming; if (s && s.state === 'active' && s.cursorFeed) this.sendCurImg(s, im); });
+      if (bridge.app && bridge.app.onCursorPos) bridge.app.onCursorPos((p) => { const s = this.incoming; if (s && s.state === 'active' && s.cursorFeed && s.mv && s.mv.readyState === 'open') { try { s.mv.send(JSON.stringify({ k: 'hc', ...p })); } catch {} } });
       if (bridge.app && bridge.app.onCursorShape) bridge.app.onCursorShape((c) => { this.curShape = c; const s = this.incoming; if (s && s.state === 'active' && s.sendCtl) s.sendCtl({ k: 'cur', c }); });
     }
 
@@ -334,7 +348,8 @@
         s.state = 'active'; s.perms.control = true; s.startedAt = Date.now();
         s.monitors = await this.bridge.screen.list().catch(() => []);
         ev('host', 'захват экрана готов; системный звук:', cap.audio ? 'есть' : 'НЕТ');
-        s.sendCtl({ k: 'granted', info: { monitors: s.monitors, monitor: cap.displayId || (s.monitors.find((m) => m.primary) || {}).id, w: cap.width, h: cap.height, name: this.hooks.getCfg().name, hasAudio: !!cap.audio, mics: await listMics(), control: true } });
+        s.sendCtl({ k: 'granted', info: { monitors: s.monitors, monitor: cap.displayId || (s.monitors.find((m) => m.primary) || {}).id, w: cap.width, h: cap.height, name: this.hooks.getCfg().name, hasAudio: !!cap.audio, mics: await listMics(), control: true, cursorOverlay: !!cap.cursorHidden } });
+        this.startCursorFeed(s);
         this.bridge.app.setActive(true);
         this.hooks.log({ who: s.name, id: s.from, kind: s.mode === 'password' ? 'password' : 'ask', note: s.mode === 'password' ? 'без подтверждения' : 'запрос подтверждён' });
         this.hooks.onIn({ type: 'active', sess: this.pub(s) });
@@ -435,7 +450,7 @@
         if (cap.audio) cap.audio.stop();            // звук остаётся прежним, второй захват не нужен
         const old = s.cap && s.cap.video; await s.vSender.replaceTrack(cap.video);
         if (old) { old.stop(); s.tracks = s.tracks.filter((t) => t !== old); }
-        s.tracks.push(cap.video); s.cap = { ...s.cap, video: cap.video, width: cap.width, height: cap.height, displayId: cap.displayId };
+        s.tracks.push(cap.video); s.cap = { ...s.cap, video: cap.video, width: cap.width, height: cap.height, displayId: cap.displayId, cursorHidden: cap.cursorHidden };
         s.sendCtl({ k: 'monitor', ok: true, id, w: cap.width, h: cap.height });
       } catch (e) { s.sendCtl({ k: 'monitor', ok: false, id, reason: String(e.message || e) }); }
     }
@@ -462,12 +477,23 @@
     }
     /** Зритель рисует курсор сам: пробуем убрать курсор из видео (меньше «двойного» курсора). Если захват это не поддерживает, всё остаётся как было. */
     async hostCursorVis(s, hide) {
+      if (s.cap && s.cap.cursorHidden) return;   // курсор и так не в видео — зритель получает его отдельным потоком
       try {
         const v = s.cap && s.cap.video; if (!v) return;
         await v.applyConstraints({ cursor: hide ? 'never' : 'always' });
         ev('host', 'курсор в видео:', hide ? 'скрыт' : 'виден', '(настройка захвата: ' + ((v.getSettings && v.getSettings().cursor) || 'не поддерживается') + ')');
       } catch (e) { ev('host', 'курсор в видео скрыть не удалось:', e && (e.name || e.message)); }
       if (s.sendCtl && this.curShape) s.sendCtl({ k: 'cur', c: this.curShape });
+    }
+    startCursorFeed(s) {
+      if (!s.cap || !s.cap.cursorHidden || !this.bridge.app.cursorTrack) return;
+      s.cursorFeed = true; s.sentImgs = new Set();
+      this.bridge.app.cursorTrack(true);
+    }
+    sendCurImg(s, im) {
+      if (!s.sendCtl || s.sentImgs.has(im.id)) return;
+      s.sentImgs.add(im.id);
+      s.sendCtl({ k: 'curimg', id: im.id, w: im.w, h: im.h, hx: im.hx, hy: im.hy, url: im.url });
     }
     hostInput(s, raw) {
       if (s.state !== 'active' || !s.perms.control) return;
@@ -502,6 +528,7 @@
       setTimeout(() => { try { s.pc && s.pc.close(); } catch {} }, 200);
       this.bridge.input.release();
       if (s.perms.admin) { this.stopSecure(s); this.bridge.admin.stop(); }
+      if (s.cursorFeed) { s.cursorFeed = false; try { this.bridge.app.cursorTrack(false); } catch {} }
       this.bridge.app.setActive(false);
       if (wasActive) this.hooks.log({ who: s.name, id: s.from, kind: 'ended', note: 'сессия завершена' });
       this.hooks.onIn({ type: 'ended', sess: this.pub(s), reason });
@@ -533,6 +560,11 @@
         };
         pc.onicecandidate = (e) => { if (e.candidate) this.outIce(s, id, e.candidate); };
         pc.onconnectionstatechange = () => this.onConnState(s, () => this.endOut('lost'));
+        // положение курсора хоста: канал mv (без повторов), приходят только самые свежие значения
+        s.mv.onmessage = (me) => {
+          let m; try { m = JSON.parse(me.data); } catch { return; }
+          if (m && m.k === 'hc' && Number.isFinite(m.x) && Number.isFinite(m.y) && this.outgoing === s) this.hooks.onOut({ type: 'cursorpos', to: s.to, p: { x: m.x, y: m.y, v: m.v ? 1 : 0, id: typeof m.id === 'string' ? m.id : '' } });
+        };
         this.viewerCtl(s);
         const offer = await pc.createOffer();
         offer.sdp = tuneVideo(tuneOpus(offer.sdp));
@@ -585,6 +617,10 @@
           case 'monitor': return this.hooks.onOut({ type: 'monitor', to: s.to, ok: !!m.ok, id: m.id, w: m.w, h: m.h, reason: m.reason || '' });
           case 'clip': return this.hooks.onOut({ type: 'clip', to: s.to, text: String(m.text || '') });
           case 'cur': return ['default','text','wait','crosshair','nwse-resize','nesw-resize','ew-resize','ns-resize','move','not-allowed','pointer','progress','help','none'].includes(m.c) ? this.hooks.onOut({ type: 'cursor', to: s.to, c: m.c }) : undefined;
+          case 'curimg':
+            if (typeof m.id === 'string' && m.id.length <= 24 && typeof m.url === 'string' && m.url.startsWith('data:image/png;base64,') && m.url.length < 200000 && [m.w, m.h, m.hx, m.hy].every((n) => Number.isFinite(n) && n >= 0 && n <= 256))
+              this.hooks.onOut({ type: 'cursorimg', to: s.to, img: { id: m.id, w: m.w, h: m.h, hx: m.hx, hy: m.hy, url: m.url } });
+            return;
           case 'clip-ack': return this.hooks.onOut({ type: 'clip-ack', to: s.to, ok: !!m.ok });
           case 'chat': if (typeof m.text === 'string' && m.text.trim() && m.text.length <= 2000) this.hooks.onOut({ type: 'chat', to: s.to, text: m.text }); return;
           case 'spk-src': return this.hooks.onOut({ type: 'spk-src', to: s.to, ok: !!m.ok, id: m.id, reason: m.reason || '' });

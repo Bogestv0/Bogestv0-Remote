@@ -339,6 +339,8 @@ a Я очень сильно люблю тебя маша I love
       case 'track': S.streams[ev.which] = ev.stream; attachStreams(); break;
       case 'granted': o.state = 'active'; o.info = ev.info; attachStreams(); sess.sendCursorVis(S.localCursor); break;
       case 'cursor': S.rcur = ev.c; applyCursorShape(); return;
+      case 'cursorimg': hostCurImgs.set(ev.img.id, ev.img); if (hostCurImgs.size > 80) hostCurImgs.delete(hostCurImgs.keys().next().value); if (hostCurPos && hostCurPos.id === ev.img.id) placeHostCursor(); return;
+      case 'cursorpos': hostCurPos = ev.p; placeHostCursor(); return;
       case 'admin-pending': o.adminPending = true; break;
       case 'admin': o.adminPending = false; o.admin = ev.ok; toast(ev.ok ? 'Права администратора подтверждены' : 'Права администратора не выданы' + (ev.reason && ev.reason !== 'denied' ? ': ' + ev.reason : ''), !ev.ok); break;
       case 'mic': if (!ev.ok) { o.mic = false; toast('Микрофон недоступен: ' + ev.reason, true); } break;
@@ -358,6 +360,7 @@ a Я очень сильно люблю тебя маша I love
           const bad = S.out.to; B.dev.clearPw(bad).then(refreshCfg).then(() => connectDialog(bad, 'Сохранённый пароль не подошёл. Введите новый.'));
         }
         if (S.out) { toast(ev.reason === 'kicked-by-me' ? 'Сессия завершена' : reasonText(ev.reason), !['kicked-by-me', 'ended'].includes(ev.reason)); }
+        hostCurPos = null; hostCurImgs.clear(); placeHostCursor();
         S.out = null; S.streams = {}; S.chat.out = []; S.chatDraft.out = ''; S.chatUnread = 0; attachStreams(); setFullscreen(false); document.body.classList.remove('sess');
         if (S.view === 'session' && !S.inSess) location.hash = 'devices';
         break;
@@ -472,7 +475,7 @@ a Я очень сильно люблю тебя маша I love
         ${chatHtml('in', s.name)}</div>`);
     }
     $('view-session').innerHTML = parts.join('');
-    const wrap = $('stageWrap'); if (wrap) { wrap.insertBefore(video, wrap.firstChild); attachStreams(); video.play().catch(() => {}); }
+    const wrap = $('stageWrap'); if (wrap) { wrap.insertBefore(video, wrap.firstChild); wrap.appendChild(hostCur); placeHostCursor(); attachStreams(); video.play().catch(() => {}); }
     document.querySelectorAll('.chat-log').forEach((l) => { l.scrollTop = l.scrollHeight; });
   }
   function statsText(o) {
@@ -482,6 +485,9 @@ a Я очень сильно люблю тебя маша I love
   function updateStatsOnly() { const m = $('toolMeta'); if (m && S.out) m.innerHTML = statsText(S.out); }
 
   // --- ввод с удалённого экрана
+  const hostCur = document.createElement('img'); hostCur.id = 'hostCursor'; hostCur.alt = ''; hostCur.draggable = false;
+  hostCur.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;display:none;z-index:5;image-rendering:auto;user-select:none';
+  const hostCurImgs = new Map(); let hostCurPos = null;
   function norm(e) {
     const r = video.getBoundingClientRect(); const vw = video.videoWidth, vh = video.videoHeight; if (!vw || !vh) return null;
     const k = Math.min(r.width / vw, r.height / vh); const w = vw * k, h = vh * k;
@@ -491,9 +497,26 @@ a Я очень сильно люблю тебя маша I love
   // Свой курсор над удалённым экраном принимает форму курсора хоста (стрелка, «I», рука, размер…), без задержки видео.
   function applyCursorShape() {
     const v = $('remoteVideo') || video; if (!v) return;
-    v.style.cursor = (S.localCursor && S.rcur && S.rcur !== 'default') ? S.rcur : '';
+    // 'none' от хоста игнорируем: он приходит, когда служба/помощник не видит курсор рабочего стола, и тогда у зрителя пропадал бы курсор совсем.
+    const c = S.rcur === 'none' ? 'default' : S.rcur;
+    v.style.cursor = (S.localCursor && c && c !== 'default') ? c : '';
   }
   window.applyCursorShape = applyCursorShape;
+  // Курсор хоста рисуем сами поверх видео: положение приходит отдельно от кадров (задержка = сеть, а не кадры/кодирование).
+  // Работает, когда хост захватывает экран без курсора (info.cursorOverlay); иначе курсор хоста остаётся в самом видео.
+  function placeHostCursor() {
+    const o = S.out, p = hostCurPos, wrap = hostCur.parentNode;
+    const img = p && hostCurImgs.get(p.id);
+    if (!o || o.state !== 'active' || !o.info || !o.info.cursorOverlay || !p || !p.v || !img || !wrap || !video.videoWidth) { hostCur.style.display = 'none'; return; }
+    const r = video.getBoundingClientRect(), wr = wrap.getBoundingClientRect(); const vw = video.videoWidth, vh = video.videoHeight;
+    const k = Math.min(r.width / vw, r.height / vh); const w = vw * k, h = vh * k;
+    const ox = r.left - wr.left + (r.width - w) / 2, oy = r.top - wr.top + (r.height - h) / 2;
+    if (hostCur.dataset.id !== img.id) { hostCur.src = img.url; hostCur.dataset.id = img.id; }
+    hostCur.style.width = (img.w * k) + 'px'; hostCur.style.height = (img.h * k) + 'px';
+    hostCur.style.transform = `translate(${ox + p.x * w - img.hx * k}px, ${oy + p.y * h - img.hy * k}px)`;
+    hostCur.style.display = 'block';
+  }
+  window.addEventListener('resize', () => placeHostCursor());
   const held = new Set(); let moveQueued = null, moveLast = 0, moveTimer = 0;
   const ctl = () => S.out && S.out.state === 'active' && S.out.control;
   // Движение мыши уходит сразу (раньше ждали следующий кадр отрисовки — до 16 мс задержки), но не чаще раза в 8 мс; последнее положение не теряется.
@@ -635,7 +658,7 @@ a Я очень сильно люблю тебя маша I love
       </div>
       <div class="panel" style="display:flex;flex-direction:column;gap:2px">
         <div class="panel-head" style="margin-bottom:10px"><h2>Соединение</h2></div>
-        <div class="setting-row"><div><div class="setting-label">Соединять только через сервер</div><div class="setting-help">Весь трафик идёт через ваш сервер (TURN). Это надёжнее, когда устройства в разных сетях и прямое соединение не устанавливается. Выключите, чтобы разрешить прямые маршруты (меньше задержка, но не всегда работает). Меняйте на обоих устройствах.</div></div>${switchHtml(c.relayOnly === true, 'sec-relay')}</div>
+        <div class="setting-row"><div><div class="setting-label">Соединять только через сервер</div><div class="setting-help">Весь трафик идёт через ваш сервер (TURN): надёжнее, но задержка больше. Когда выключено (по умолчанию), компьютеры соединяются напрямую, а через сервер — только если прямое соединение не вышло. Меняйте на обоих устройствах.</div></div>${switchHtml(c.relayOnly === true, 'sec-relay')}</div>
       </div>
       <div class="panel" style="display:flex;flex-direction:column;gap:12px">
         <div class="panel-head"><h2>Диагностика соединения</h2><span class="hint">если подключение не получается — нажмите «Скопировать» и пришлите текст</span></div>

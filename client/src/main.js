@@ -25,6 +25,7 @@ function toRenderer(ch, payload) {
   win.webContents.send(ch, payload);
 }
 const helper = { sock: null, buf: '' };
+let displaySource = null;  // источник экрана для getDisplayMedia (захват без курсора)
 let selectedDisplay = null; // id выбранного монитора; null = основной
 const currentDisplay = () => screen.getAllDisplays().find((d) => d.id === selectedDisplay) || screen.getPrimaryDisplay();
 
@@ -88,14 +89,42 @@ function createTray() {
   tray.setContextMenu(trayMenu());
   tray.on('double-click', () => showWindow());
 }
-let shapeTimer = 0, lastShape = '';
+let shapeTimer = 0, lastShape = '', lastKey = '', lastPos = '', cursorTrack = false;
+const curImgCache = new Map();   // hCursor -> { id, w, h, hx, hy, url } | null
+// Курсор хоста отдельно от видео: положение (до 60 раз/с) и картинка (один раз на каждый вид курсора) уходят зрителю, он рисует курсор сам.
+function curImageFor(info) {
+  if (curImgCache.has(info.key)) return curImgCache.get(info.key);
+  let r = null;
+  try {
+    const im = info.handle ? injector.cursorImage(info.handle) : null;
+    if (im) {
+      const img = nativeImage.createFromBitmap(im.bgra, { width: im.w, height: im.h });
+      r = { id: crypto.createHash('sha1').update(im.bgra).digest('hex').slice(0, 12), w: im.w, h: im.h, hx: im.hx, hy: im.hy, url: img.toDataURL() };
+    }
+  } catch (e) { console.error('cursor image', e && e.message); }
+  if (curImgCache.size > 80) curImgCache.clear();
+  curImgCache.set(info.key, r);
+  return r;
+}
+function pollCursor() {
+  const info = injector.cursorInfo(); if (!info) return;
+  const sh = info.visible ? info.shape : 'default';
+  if (sh !== lastShape) { lastShape = sh; toRenderer('cursor:shape', sh); }
+  if (!cursorTrack) return;
+  let img = null;
+  if (info.visible) { img = curImageFor(info); if (img && info.key !== lastKey) { lastKey = info.key; toRenderer('cursor:img', img); } }
+  const d = currentDisplay(); const b = d.bounds;
+  let dip; try { dip = screen.screenToDipPoint({ x: info.x, y: info.y }); } catch { dip = { x: info.x / d.scaleFactor, y: info.y / d.scaleFactor }; }
+  const nx = (dip.x - b.x) / Math.max(1, b.width - 1), ny = (dip.y - b.y) / Math.max(1, b.height - 1);
+  const vis = info.visible && nx >= 0 && ny >= 0 && nx <= 1 && ny <= 1;
+  const msg = { x: Math.round(nx * 10000) / 10000, y: Math.round(ny * 10000) / 10000, v: vis ? 1 : 0, id: img ? img.id : '', s: sh };
+  const key = msg.x + ',' + msg.y + ',' + msg.v + ',' + msg.id;
+  if (key !== lastPos) { lastPos = key; toRenderer('cursor:pos', msg); }
+}
 function watchCursorShape(on) {
-  clearInterval(shapeTimer); shapeTimer = 0; lastShape = '';
+  clearInterval(shapeTimer); shapeTimer = 0; lastShape = ''; lastKey = ''; lastPos = '';
   if (!on || !injector || !injector.available) return;
-  shapeTimer = setInterval(() => {
-    const sh = injector.cursorShape();
-    if (sh !== lastShape) { lastShape = sh; toRenderer('cursor:shape', sh); }
-  }, 30);
+  shapeTimer = setInterval(pollCursor, 16);
 }
 function setTrayActive(active) {
   sessionActive = !!active; watchCursorShape(sessionActive);
@@ -349,6 +378,7 @@ function registerIpc() {
     const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
     const s = sources.find((x) => x.display_id === String(d.id)) || sources[0];
     if (!s) return null;
+    displaySource = s;
     return { id: s.id, displayId: String(d.id), width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) };
   });
   ipcMain.handle('app:readClipboard', () => clipboard.readText().slice(0, 200000));
@@ -358,6 +388,7 @@ function registerIpc() {
   ipcMain.on('win:fs', (_e, on) => { if (win && !win.isDestroyed()) win.setFullScreen(!!on); });
   ipcMain.handle('admin:start', (_e, meta) => startHelper(meta));
   ipcMain.handle('service:status', () => serviceStatus());
+  ipcMain.on('cursor:track', (_e, on) => { cursorTrack = !!on; lastKey = ''; lastPos = ''; });
   ipcMain.on('helper:capture', (_e, on) => helperSend({ k: 'capture', on: !!on }));
   ipcMain.handle('admin:stop', () => { stopHelper(); return true; });
 
@@ -392,6 +423,15 @@ app.whenReady().then(async () => {
   const ALLOWED = ['media', 'fullscreen', 'pointerLock', 'keyboardLock', 'speaker-selection'];
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(ALLOWED.includes(perm) && wc.getURL().startsWith('file://')));
   ses.setPermissionCheckHandler((wc, perm) => ALLOWED.includes(perm));
+  // Захват экрана через getDisplayMedia (поддерживает cursor:'never' — курсор не попадает в видео). Источник выбирает наш код (screen:source), без окна выбора.
+  try {
+    ses.setDisplayMediaRequestHandler((req, cb) => {
+      const ok = req.frame && String(req.frame.url || '').startsWith('file://') && displaySource;
+      if (!ok) return cb({});
+      const r = { video: displaySource }; if (req.audioRequested && process.platform === 'win32') r.audio = 'loopback';
+      cb(r);
+    });
+  } catch (e) { console.error('displayMedia handler', e && e.message); }
 
   registerIpc();
   createWindow();

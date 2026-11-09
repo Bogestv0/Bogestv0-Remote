@@ -60,6 +60,55 @@ function createInjector(log = () => {}) {
       const SHAPES = { 32512: 'default', 32513: 'text', 32514: 'wait', 32515: 'crosshair', 32516: 'default', 32642: 'nwse-resize', 32643: 'nesw-resize', 32644: 'ew-resize', 32645: 'ns-resize', 32646: 'move', 32648: 'not-allowed', 32649: 'pointer', 32650: 'progress', 32651: 'help' };
       const shapeByHandle = new Map();
       for (const id of Object.keys(SHAPES)) { try { shapeByHandle.set(String(koffi.address(LoadCursorW(null, Number(id)))), SHAPES[id]); } catch {} }
+      // Картинка курсора хоста (для зрителя): hCursor -> GetIconInfo -> GetDIBits -> BGRA.
+      const gdi32 = koffi.load('gdi32.dll');
+      const ICONINFO = koffi.struct('ICONINFO', { fIcon: 'int', xHotspot: 'uint32', yHotspot: 'uint32', hbmMask: 'void *', hbmColor: 'void *' });
+      const BMIH = koffi.struct('BMIH', { biSize: 'uint32', biWidth: 'int32', biHeight: 'int32', biPlanes: 'uint16', biBitCount: 'uint16', biCompression: 'uint32', biSizeImage: 'uint32', biXPelsPerMeter: 'int32', biYPelsPerMeter: 'int32', biClrUsed: 'uint32', biClrImportant: 'uint32' });
+      const GetIconInfo = user32.func('bool __stdcall GetIconInfo(void *hIcon, _Out_ ICONINFO *pii)');
+      const GetDC = user32.func('void * __stdcall GetDC(void *hWnd)');
+      const ReleaseDC = user32.func('int __stdcall ReleaseDC(void *hWnd, void *hDC)');
+      const GetObjectW = gdi32.func('int __stdcall GetObjectW(void *h, int c, void *pv)');
+      const GetDIBits = gdi32.func('int __stdcall GetDIBits(void *hdc, void *hbm, uint32 start, uint32 lines, void *bits, _Inout_ BMIH *bmi, uint32 usage)');
+      const DeleteObject = gdi32.func('bool __stdcall DeleteObject(void *ho)');
+      const bmpSize = (hbm) => { const b = Buffer.alloc(32); return GetObjectW(hbm, 32, b) ? { w: b.readInt32LE(4), h: b.readInt32LE(8) } : null; };
+      const bmpBits = (hdc, hbm, w, h) => {   // 32 бита на пиксель, строки сверху вниз
+        const buf = Buffer.alloc(w * h * 4);
+        const hdr = { biSize: 40, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: 0, biSizeImage: buf.length, biXPelsPerMeter: 0, biYPelsPerMeter: 0, biClrUsed: 0, biClrImportant: 0 };
+        return GetDIBits(hdc, hbm, 0, h, buf, hdr, 0) ? buf : null;
+      };
+      /** -> { w, h, hx, hy, bgra } или null. Цветные курсоры берём как есть, монохромные («I», перекрестие) собираем из AND/XOR-маски. */
+      const cursorImage = (hCur) => {
+        const ii = { fIcon: 0, xHotspot: 0, yHotspot: 0, hbmMask: null, hbmColor: null };
+        if (!hCur || !GetIconInfo(hCur, ii)) return null;
+        const hdc = GetDC(null);
+        try {
+          const mk = ii.hbmMask ? bmpSize(ii.hbmMask) : null;
+          const cl = ii.hbmColor ? bmpSize(ii.hbmColor) : null;
+          const w = cl ? cl.w : mk && mk.w, h = cl ? cl.h : mk && mk.h / 2;
+          if (!w || !h || w > 256 || h > 256) return null;
+          const out = Buffer.alloc(w * h * 4);
+          if (cl) {
+            const col = bmpBits(hdc, ii.hbmColor, w, h); if (!col) return null;
+            let hasA = false; for (let i = 3; i < col.length; i += 4) if (col[i]) { hasA = true; break; }
+            const msk = hasA ? null : (mk && mk.h >= h ? bmpBits(hdc, ii.hbmMask, w, mk.h) : null);
+            col.copy(out);
+            if (!hasA) for (let i = 0; i < w * h; i++) out[i * 4 + 3] = msk && msk[i * 4] > 127 ? 0 : 255;
+          } else {
+            const m = bmpBits(hdc, ii.hbmMask, w, h * 2); if (!m) return null;
+            for (let i = 0; i < w * h; i++) {
+              const a = m[i * 4] > 127, x = m[(i + w * h) * 4] > 127, o = i * 4;
+              if (a && !x) continue;                                // прозрачный
+              const v = !a && x ? 255 : 0;                          // AND=0: чёрный/белый; AND=1,XOR=1 (инверсия) рисуем тёмным
+              out[o] = out[o + 1] = out[o + 2] = v; out[o + 3] = 255;
+            }
+          }
+          return { w, h, hx: ii.xHotspot, hy: ii.yHotspot, bgra: out };
+        } finally {
+          try { if (hdc) ReleaseDC(null, hdc); } catch {}
+          try { if (ii.hbmMask) DeleteObject(ii.hbmMask); } catch {}
+          try { if (ii.hbmColor) DeleteObject(ii.hbmColor); } catch {}
+        }
+      };
       const curSize = koffi.sizeof(CURSORINFO);
       const size = koffi.sizeof(INPUT);
       api = {
@@ -74,19 +123,29 @@ function createInjector(log = () => {}) {
         shape() {
           const ci = { cbSize: curSize, flags: 0, hCursor: null, ptScreenPos: { x: 0, y: 0 } };
           if (!GetCursorInfo(ci)) return 'default';
-          if (!(ci.flags & 1)) return 'none';   // курсор скрыт (например, в игре)
+          if (!(ci.flags & 1)) return 'default';   // курсор «скрыт» или недоступен из этого процесса — зрителю свой курсор не прячем
           return ci.hCursor ? (shapeByHandle.get(String(koffi.address(ci.hCursor))) || 'default') : 'default';
         },
+        /** Положение (физические пиксели экрана), видимость и идентификатор текущего курсора. */
+        info() {
+          const ci = { cbSize: curSize, flags: 0, hCursor: null, ptScreenPos: { x: 0, y: 0 } };
+          if (!GetCursorInfo(ci)) return null;
+          const key = ci.hCursor ? String(koffi.address(ci.hCursor)) : '0';
+          return { x: ci.ptScreenPos.x, y: ci.ptScreenPos.y, visible: !!(ci.flags & 1), key, shape: shapeByHandle.get(key) || 'default', handle: ci.hCursor };
+        },
+        image(handle) { return cursorImage(handle); },
       };
     } catch (e) { log('input: koffi недоступен —', e.message); }
   }
 
   const noop = () => {};
-  const a = api || { mouse: noop, key: noop, move: noop, shape: () => 'default' };
+  const a = api || { mouse: noop, key: noop, move: noop, shape: () => 'default', info: () => null, image: () => null };
   return {
     available: !!api,
     move(px, py) { a.move(px, py); },
     cursorShape() { try { return a.shape(); } catch { return 'default'; } },
+    cursorInfo() { try { return a.info(); } catch { return null; } },
+    cursorImage(handle) { try { return a.image(handle); } catch { return null; } },
     button(btn, down) {
       const f = MOUSE[btn]; if (!f) return;
       a.mouse(down ? f[0] : f[1]);

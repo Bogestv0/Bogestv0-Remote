@@ -14,7 +14,8 @@ const DEFAULTS = {
   autostart: true,
   minimizeToTray: true,
   hideOnConnect: true,       // когда к этому компьютеру подключились — убрать окно программы в трей (не мешает на удалённом экране)
-  relayOnly: true,           // соединять только через TURN-сервер (устойчиво к разным NAT); можно выключить в «Безопасность»
+  relayOnly: false,          // false: сначала прямое соединение между компьютерами, через TURN-сервер — только если прямое не вышло; true — всегда через сервер («Безопасность»)
+  cfgVer: 2,                 // версия формата настроек (для разовых миграций)
   server: { host: '46.226.166.141', port: 8443, fingerprint: '' },   // встроенный сервер: в интерфейсе не показывается
   customServer: false,       // true — использовать свой сервер из custom
   custom: { host: '', port: 8443, fingerprint: '' },
@@ -37,6 +38,8 @@ class Store {
       if (saved.customServer === undefined && saved.server && saved.server.host && saved.server.host !== DEFAULTS.server.host) {
         this.data.customServer = true; this.data.custom = { ...DEFAULTS.custom, ...saved.server }; this.data.server = { ...DEFAULTS.server };
       }
+      // 0.1.18: по умолчанию прямое соединение. Раньше везде стояло «только через сервер» — один раз сбрасываем, дальше выбор пользователя сохраняется.
+      if (!(saved.cfgVer >= 2)) { this.data.relayOnly = false; this.data.cfgVer = 2; }
     } catch { /* первый запуск */ }
     if (!/^\d{9}$/.test(this.data.id)) this.newIdentity();
     this.save();
